@@ -1,7 +1,7 @@
 {
   "name": "proton-drive-mcp",
   "version": "1.5.2",
-  "description": "MCP server and CLI that gives Claude full access to Proton Drive — upload, download, share, and manage your end-to-end encrypted files without leaving the conversation.",
+  "description": "MCP server and CLI that gives Claude full access to Proton Drive \u2014 upload, download, share, and manage your end-to-end encrypted files without leaving the conversation.",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
@@ -54,7 +54,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.32.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -75,5 +75,8 @@
   "optionalDependencies": {
     "fflate": "0.8.3",
     "unpdf": "1.8.1"
+  },
+  "overrides": {
+    "proxy-addr": ">=2.0.8"
   }
 }
