@@ -17,6 +17,7 @@ import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
 import { assertLocalPathAllowed } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
+import { approvalField } from "../policy/untrusted.js";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
 import type { DownloadResult, TransferSummary } from "../types/index.js";
 import type { DownloadFileStrategy, DownloadFolderStrategy, PhotoDownloadStrategy } from "../policy/strategies.js";
@@ -66,10 +67,10 @@ export const freezePhotoDownload = (r: PhotoDownloadRequest): Readonly<PhotoDown
   Object.freeze({ ...r, remotePaths: Object.freeze([...r.remotePaths]) });
 
 export function describeDownload(r: DownloadRequest): string {
-  return `remotePath: ${showValue(r.remotePath)}\nlocalPath: ${showValue(r.localPath)}\nfileConflictStrategy: ${r.fileStrategy}\nfolderConflictStrategy: ${r.folderStrategy}`;
+  return `remotePath: ${approvalField(r.remotePath)}\nlocalPath: ${approvalField(r.localPath)}\nfileConflictStrategy: ${r.fileStrategy}\nfolderConflictStrategy: ${r.folderStrategy}`;
 }
 export function describePhotoDownload(r: PhotoDownloadRequest): string {
-  return `photoPaths: ${r.remotePaths.slice(0, 5).map((p) => showValue(p)).join(" | ")}${r.remotePaths.length > 5 ? ` (+${r.remotePaths.length - 5} more)` : ""}\nlocalFolder: ${showValue(r.localPath)}\nconflictStrategy: ${r.strategy}`;
+  return `${r.remotePaths.map((p, i) => `photoPaths[${i}]: ${approvalField(p)}`).join("\n")}\nlocalFolder: ${approvalField(r.localPath)}\nconflictStrategy: ${r.strategy}`;
 }
 
 // ---- 1. precheck (no CLI call) ----
