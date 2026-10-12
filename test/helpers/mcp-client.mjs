@@ -62,6 +62,8 @@ export function fakeEnv(mode, sandbox, extra = {}) {
     PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE: "1",
     // Same for the share policy: suites about plumbing use bare calls; share-policy.test.mjs sets "strict" itself.
     PROTON_DRIVE_SHARE_POLICY: "off",
+    // The CLI gets a minimal environment (F-10); the fake binary is configured through FAKE_* variables.
+    PROTON_DRIVE_PASS_ENV: "FAKE_*",
     FAKE_MODE: mode,
     FAKE_ARGV_LOG: sandbox.argvLog,
     FAKE_PIDFILE: sandbox.pidFile,

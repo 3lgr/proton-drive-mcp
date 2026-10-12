@@ -3,6 +3,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, DriveParseError } from "./errors.js";
 
 import { trustedBinary } from "./binaryIntegrity.js";
+import { buildChildEnv } from "./childEnv.js";
+import { redact } from "./redact.js";
 const DEFAULT_TIMEOUT_MS = 60_000;
 // Upload and download transfer actual file bytes — use a much longer timeout.
 const TRANSFER_TIMEOUT_MS = 30 * 60_000; // 30 minutes
@@ -110,6 +112,7 @@ async function execCli(args: string[], timeoutMs: number): Promise<{ stdout: str
     // stdin is ignored: the CLI must never sit waiting on an interactive prompt.
     const child = spawn(binary, args, {
       detached: process.platform !== "win32",
+      env: buildChildEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     running.add(child);
@@ -216,7 +219,7 @@ function describeFailure(e: ExecError): string {
     const code = typeof e.code === "number" ? ` (exit ${e.code})` : "";
     text = e.signal ? `CLI was terminated by ${e.signal}` : `CLI failed with no output${code}`;
   }
-  text = text.replace(/(--(?:password|message)[= ])\S+/g, "$1***");
+  text = redact(text);
   return text.length > MAX_ERROR_CHARS ? text.slice(0, MAX_ERROR_CHARS) + "…" : text;
 }
 
@@ -379,9 +382,10 @@ export async function runDrive(args: string[]): Promise<unknown> {
     try {
       return parseJsonLoose(raw);
     } catch {
-      const snippet = stripAnsi(raw).slice(0, 200).replace(/\s+/g, " ");
-      try { process.stderr.write(`[proton-drive-mcp] parse error: ${snippet}\n`); } catch { /* ignore EPIPE */ }
-      throw new DriveParseError(`Failed to parse CLI output as JSON: ${snippet}`);
+      // F-12: the raw output can hold names, links or tokens; report only its size.
+      const note = `the CLI printed ${raw.length} bytes that are not JSON`;
+      try { process.stderr.write(`[proton-drive-mcp] parse error: ${note}\n`); } catch { /* ignore EPIPE */ }
+      throw new DriveParseError(`Failed to parse CLI output as JSON (${note}).`);
     }
   } catch (err) {
     normalizeExecError(err, args);
@@ -412,6 +416,7 @@ export async function checkCliAvailable(): Promise<{ available: boolean; reason?
   return new Promise((resolve) => {
     const child = spawn(binary, ["version"], {
       detached: process.platform !== "win32",
+      env: buildChildEnv(),
       stdio: ["ignore", "ignore", "ignore"],
     });
     running.add(child);

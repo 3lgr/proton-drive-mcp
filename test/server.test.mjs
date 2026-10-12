@@ -556,12 +556,14 @@ describe("CLI output handling and error sanitization", () => {
       assert.equal(r.data.items[0].name, "z.txt");
     }));
 
-  it("garbage output gives a Parse error containing a snippet", () =>
+  it("garbage output gives a Parse error that reports the size, never the content (F-12)", () =>
     withServer("garbage", {}, async (c) => {
       const r = await c.call("drive_list", { path: "/my-files" });
       assert.equal(r.isError, true);
       assert.match(r.text, /^Parse error/);
-      assert.match(r.text, /this is not json/);
+      assert.match(r.text, /\d+ bytes that are not JSON/);
+      assert.doesNotMatch(r.text, /this is not json/);
+      assert.doesNotMatch(c.stderr, /this is not json/);
     }));
 
   it("empty stdout on drive_list yields an empty items array", () =>
