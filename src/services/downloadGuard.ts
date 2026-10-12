@@ -2,18 +2,17 @@
 // Fail closed throughout: any error refuses the call, promotes nothing and removes the staging directory.
 //   1. precheck   - the item's own name and the exact local target go through the local path policy.
 //   2. enumerate  - a folder is listed in full; every descendant name must be one plain path component.
-//   3. stage      - the CLI downloads into a fresh 0700 directory inside the allowed root's private
-//                   .pdmcp-staging folder (beside the destination when there is no allowlist), never into it.
+//   3. stage      - the CLI downloads into a fresh, marked 0700 directory under a private base the server
+//                   owns (<allowed root>/.pdmcp-private or the server's temp base), never into the destination.
 //   4. scan       - lstat only (links are never followed): names, collisions, hardlinks, limits; modes normalised.
 //   5. plan       - planDownload() (pure, downloadPlan.ts) returns the exact allowed actions or throws.
 //   6. execute    - only those actions run, on the destination resolved once with realpath.native; files move
 //                   with link(2) so nothing is ever overwritten; a failure rolls back what this call placed.
 import {
-  chmodSync, constants, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync,
+  chmodSync, constants, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync,
   rmSync, rmdirSync, unlinkSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
 import { assertLocalPathAllowed, allowedRootFor } from "../utils/localguard.js";
@@ -21,6 +20,7 @@ import { showValue } from "../utils/text.js";
 import { strMarker } from "../utils/safeOutput.js";
 import { approvalField } from "../policy/untrusted.js";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
+import { createOwnedTemp, removeTreeSafe, serverTempBase, ROOT_PRIVATE_NAME, type OwnedTemp } from "../utils/privateTemp.js";
 import type { DownloadResult, TransferSummary } from "../types/index.js";
 import type { DownloadFileStrategy, DownloadFolderStrategy, PhotoDownloadStrategy } from "../policy/strategies.js";
 import { assertSafeEntryName, planDownload, type Action, type Existing, type Policy, type StagedNode } from "./downloadPlan.js";
@@ -131,37 +131,23 @@ function ensurePrivateDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
-export const STAGING_DIR_NAME = ".pdmcp-staging";
-
 /**
- * The private folder (0700, ours) inside the allowed root that holds `realDest`. Staging beside the destination
- * would land in the root's PARENT (often $HOME) when the destination is the root itself.
- */
-function stagingFolderInRoot(realDest: string): string | undefined {
-  const root = allowedRootFor(realDest);
-  if (!root) return undefined;
-  const dir = join(root, STAGING_DIR_NAME);
-  try { mkdirSync(dir, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") return undefined; }
-  const st = lstatSync(dir);
-  if (!st.isDirectory() || st.isSymbolicLink()) return undefined;
-  if (typeof process.getuid === "function" && st.uid !== process.getuid()) return undefined;
-  chmodSync(dir, 0o700);
-  return dir;
-}
-
-/**
- * A fresh 0700 directory: inside the allowed root's private staging folder (same filesystem => atomic rename);
- * without an allowlist, beside `realDest`; as a last resort in the OS temp dir.
+ * A fresh private scratch directory (marked, 0700): inside the allowed root's .pdmcp-private folder when the
+ * destination is under an allowed root (same filesystem => atomic rename), else in the server's private temp base.
+ * Never beside a user-chosen destination (for a destination that IS the root, that would be its parent).
  */
 function makeStaging(realDest: string): string {
-  let dir: string;
-  const inRoot = stagingFolderInRoot(realDest);
-  try { dir = inRoot ? mkdtempSync(join(inRoot, "pdmcp-stage-")) : mkdtempSync(join(dirname(realDest), ".pdmcp-stage-")); }
-  catch { dir = mkdtempSync(join(tmpdir(), "pdmcp-stage-")); }
-  chmodSync(dir, 0o700);
-  registerTempDir(dir);
-  return dir;
+  const root = allowedRootFor(realDest);
+  const base = root ? join(root, ROOT_PRIVATE_NAME) : serverTempBase();
+  let owned: OwnedTemp;
+  try { owned = createOwnedTemp(base, "pdmcp-stage-"); }
+  catch { owned = createOwnedTemp(serverTempBase(), "pdmcp-stage-"); }
+  stageRoots.set(owned.work, owned.root);
+  registerTempDir(owned.root);
+  return owned.work;
 }
+
+const stageRoots = new Map<string, string>();
 
 // ---- 4. scan the staged tree (lstat only, links are never followed) ----
 
@@ -284,7 +270,9 @@ async function staged<T>(
     }
     return { result, ...execute(realStage, realDest, actions) };
   } finally {
-    try { rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
+    const owner = stageRoots.get(stage) ?? stage;
+    stageRoots.delete(stage);
+    try { removeTreeSafe(owner); } catch { /* best effort; the startup sweep takes it if it is ours and orphaned */ } finally { unregisterTempDir(owner); }
   }
 }
 

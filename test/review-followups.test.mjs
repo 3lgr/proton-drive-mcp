@@ -13,7 +13,6 @@ import { validateRemotePath } from "../dist/utils/validation.js";
 import { makeIgnore, planBulkTrash } from "../dist/services/plan.js";
 import { buildChildEnv } from "../dist/utils/childEnv.js";
 import { registerTempDir, removeAllTempDirsSync } from "../dist/utils/tempDirs.js";
-import { sweepStaleTempDirs } from "../dist/utils/tempSweep.js";
 import { checkPublicLink, loadSharePolicy } from "../dist/policy/sharePolicy.js";
 import { makeSandbox, startServer, fakeEnv, DIST_INDEX, nonVersionCalls } from "./helpers/mcp-client.mjs";
 
@@ -57,7 +56,7 @@ describe("child environment", () => {
 });
 
 describe("frozen temp directories are removable", () => {
-  it("removeAllTempDirsSync thaws read-only trees first; the sweeper knows the new prefixes", async () => {
+  it("removeAllTempDirsSync thaws read-only trees first", async () => {
     const root = mkdtempSync(join(tmpdir(), "pdmcp-upload-frozen-"));
     mkdirSync(join(root, "d"));
     writeFileSync(join(root, "d", "f"), "x");
@@ -68,13 +67,7 @@ describe("frozen temp directories are removable", () => {
     removeAllTempDirsSync();
     assert.equal(existsSync(root), false);
 
-    const stale = mkdtempSync(join(tmpdir(), "pdmcp-stage-stale-"));
-    mkdirSync(join(stale, "k"));
-    chmodSync(join(stale, "k"), 0o500);
-    const old = new Date(Date.now() - 2 * 3600_000);
-    utimesSync(stale, old, old);
-    await sweepStaleTempDirs(tmpdir(), 3600_000);
-    assert.equal(existsSync(stale), false);
+    // the sweeper (marker-based) is covered in sweep-owned.test.mjs
   });
 });
 

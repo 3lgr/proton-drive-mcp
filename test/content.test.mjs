@@ -13,7 +13,9 @@ import { usePrivateTmp } from "./helpers/private-tmp.mjs";
 const deps = {};
 // Private TMPDIR per test: readDirs() must only ever see this test's own pdmcp-read-* dirs.
 usePrivateTmp(beforeEach, afterEach);
-const readDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith("pdmcp-read-"));
+const readDirs = () => {
+  try { return readdirSync(join(tmpdir(), `pdmcp-private-${process.getuid()}`)).filter((n) => n.startsWith("pdmcp-read-")); } catch { return []; }
+};
 const LOCK = () => new Error("SQLiteError: database is locked");
 
 /** Fake DriveService: info() returns `node`, download() writes `name` with `bytes` into the dir it is given. */

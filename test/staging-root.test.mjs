@@ -1,12 +1,11 @@
-// N-05: the download staging directory lives inside the allowed local root (private, 0700), never beside a
-// destination that is the root itself (which would be $HOME), and the sweeper cleans it after a killed process.
+// N-05: the download staging directory is a marked private scratch dir under a base the server owns, never
+// beside the destination (for a destination that is the root itself, "beside" would be its parent, e.g. $HOME).
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync, existsSync, rmSync, utimesSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, statSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { makeSandbox, startServer, nonVersionCalls } from "./helpers/mcp-client.mjs";
-import { sweepStagingDirs } from "../dist/utils/tempSweep.js";
 
 const made = [];
 const fresh = () => {
@@ -18,46 +17,47 @@ const fresh = () => {
 };
 after(() => made.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-describe("N-05 staging inside the allowed root", () => {
-  it("destination == the root: the stage is root/.pdmcp-staging/<private dir>, nothing is created beside the root", async () => {
-    const { parent, root } = fresh();
-    const tree = join(parent, "tree.json");
-    writeFileSync(tree, JSON.stringify({ __info__: { "/my-files/a.txt": { uid: "u1", type: "file", name: { ok: true, value: "a.txt" }, activeRevision: { claimedSize: 1 } } } }));
-    const sb = makeSandbox();
-    const c = await startServer("tree", sb, {
-      FAKE_TREE: tree, PROTON_DRIVE_LOCAL_ROOT: root,
-      FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "a.txt", content: "hi" }]),
-    });
-    try {
-      const r = await c.call("drive_download", { remotePath: "/my-files/a.txt", localPath: root });
-      assert.equal(r.isError, false, r.text);
-      const argv = nonVersionCalls(sb.argvLog).find((a) => a[1] === "download");
-      const stage = argv[3];
-      assert.equal(basename(dirname(stage)), ".pdmcp-staging");
-      assert.equal(dirname(dirname(stage)), root);
-      assert.equal(statSync(dirname(stage)).mode & 0o777, 0o700);
-      assert.deepEqual(readdirSync(parent).sort(), ["root", "tree.json"], "nothing beside the root");
-      assert.equal(existsSync(stage), false, "stage removed");
-      assert.equal(existsSync(join(root, "a.txt")), true);
-    } finally { await c.close(); sb.cleanup(); }
-  });
-});
+async function download(env, localPath, parent) {
+  const tree = join(parent, "tree.json");
+  writeFileSync(tree, JSON.stringify({ __info__: { "/my-files/a.txt": { uid: "u1", type: "file", name: { ok: true, value: "a.txt" }, activeRevision: { claimedSize: 1 } } } }));
+  const sb = makeSandbox();
+  const c = await startServer("tree", sb, { FAKE_TREE: tree, FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "a.txt", content: "hi" }]), ...env });
+  try {
+    const r = await c.call("drive_download", { remotePath: "/my-files/a.txt", localPath });
+    const argv = nonVersionCalls(sb.argvLog).find((a) => a[1] === "download");
+    return { r, stage: argv[3] };
+  } finally { await c.close(); sb.cleanup(); }
+}
 
-describe("N-05 the sweeper covers the staging directory", () => {
-  it("removes old stage dirs under <root>/.pdmcp-staging, keeps recent ones", async () => {
-    const { root } = fresh();
-    const staging = join(root, ".pdmcp-staging");
-    mkdirSync(staging, { mode: 0o700 });
-    const old = join(staging, "pdmcp-stage-old");
-    const recent = join(staging, "pdmcp-stage-recent");
-    mkdirSync(old); mkdirSync(recent);
-    writeFileSync(join(old, "partial.bin"), "x");
-    const t = new Date(Date.now() - 2 * 3600_000);
-    utimesSync(old, t, t);
-    const before = process.env.PROTON_DRIVE_LOCAL_ROOT;
-    process.env.PROTON_DRIVE_LOCAL_ROOT = root;
-    try { await sweepStagingDirs(3600_000); } finally { if (before === undefined) delete process.env.PROTON_DRIVE_LOCAL_ROOT; else process.env.PROTON_DRIVE_LOCAL_ROOT = before; }
-    assert.equal(existsSync(old), false);
-    assert.equal(existsSync(recent), true);
+describe("N-05 staging is private and never beside the destination", () => {
+  it("destination == the allowed root: the stage is <root>/.pdmcp-private/pdmcp-stage-*/w, nothing is created beside the root", async () => {
+    const { parent, root } = fresh();
+    const { r, stage } = await download({ PROTON_DRIVE_LOCAL_ROOT: root }, root, parent);
+    assert.notEqual(r.isError, true, r.text);
+    assert.equal(basename(stage), "w");
+    assert.match(basename(dirname(stage)), /^pdmcp-stage-/);
+    assert.equal(dirname(dirname(stage)), join(root, ".pdmcp-private"));
+    assert.equal(statSync(join(root, ".pdmcp-private")).mode & 0o777, 0o700);
+    assert.deepEqual(readdirSync(parent).sort(), ["root", "tree.json"], "nothing beside the root");
+    assert.equal(existsSync(dirname(stage)), false, "scratch dir removed");
+    assert.equal(existsSync(join(root, "a.txt")), true);
+  });
+  it("destination under a root: still inside that root's private folder, not next to the destination", async () => {
+    const { parent, root } = fresh();
+    const dest = join(root, "sub", "deeper");
+    const { r, stage } = await download({ PROTON_DRIVE_LOCAL_ROOT: root }, dest, parent);
+    assert.notEqual(r.isError, true, r.text);
+    assert.equal(dirname(dirname(stage)), join(root, ".pdmcp-private"));
+    assert.deepEqual(readdirSync(join(root, "sub")), ["deeper"]);
+  });
+  it("without an allowlist: the server's private temp base, still not beside the destination", async () => {
+    const { parent } = fresh();
+    const tmp = mkdtempSync(join(realpathSync(tmpdir()), "stagetmp-"));
+    made.push(tmp);
+    const dest = join(parent, "dest");
+    const { r, stage } = await download({ TMPDIR: tmp }, dest, parent);
+    assert.notEqual(r.isError, true, r.text);
+    assert.equal(dirname(dirname(stage)), join(realpathSync(tmp), `pdmcp-private-${process.getuid()}`));
+    assert.deepEqual(readdirSync(parent).sort(), ["dest", "root", "tree.json"]);
   });
 });

@@ -100,9 +100,9 @@ describe("confirmation flags", () => {
     const r = await runCli(["photo", "download", "/photos/p1.jpg", join(TMP, "ph"), "--conflict", "remove", "--confirm"]);
     assert.equal(r.code, 0, r.stderr);
     const argv = r.calls[0];
-    // F-02: the CLI writes to a staging directory beside the destination, never into the destination itself
+    // F-02: the CLI writes to a private staging directory, never into the destination itself
     assert.deepEqual([argv[0], argv[1], argv[2], ...argv.slice(4)], ["photo", "download", "/photos/p1.jpg", "--conflict-strategy", "remove", "--json"]);
-    assert.match(argv[3], /\.pdmcp-stage-/);
+    assert.match(argv[3], /pdmcp-stage-/);
   });
 });
 
@@ -205,7 +205,7 @@ describe("no arguments", () => {
     try {
       const res = await c.initialize({ timeout: 5000 });
       assert.equal(res.result.serverInfo.name, "proton-drive-mcp");
-      assert.equal((await c.listTools()).length, 47);
+      assert.equal((await c.listTools()).length, 46);
     } finally { await c.close(); }
   });
 });

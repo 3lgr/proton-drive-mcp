@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
+import { createOwnedTemp, removeTreeSafe, serverTempBase } from "../utils/privateTemp.js";
 import { createReadStream } from "node:fs";
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { DriveFile, ShareStatus } from "../types/index.js";
 import type { DriveService } from "./drive.js";
@@ -225,8 +225,9 @@ const oneLine = (m: string): string => (m.split("\n")[0] ?? m).slice(0, 160);
  */
 export function makeDriveHasher(drive: DriveService): Hasher {
   const once: Hasher = async (node) => {
-    const dir = await mkdtemp(join(tmpdir(), "pdmcp-dup-"));
-    registerTempDir(dir);
+    const owned = createOwnedTemp(serverTempBase(), "pdmcp-dup-");
+    const dir = owned.work;
+    registerTempDir(owned.root);
     try {
       const r = await safeDownload(drive, freezeDownload({ remotePath: node.path, localPath: dir, fileStrategy: "rename", folderStrategy: "skip" }), { transient: true });
       if (r.failed > 0 || r.downloaded < 1) throw new Error("download failed");
@@ -236,8 +237,8 @@ export function makeDriveHasher(drive: DriveService): Hasher {
       for await (const chunk of createReadStream(join(dir, name))) h.update(chunk);
       return h.digest("hex");
     } finally {
-      await rm(dir, { recursive: true, force: true });
-      unregisterTempDir(dir);
+      try { removeTreeSafe(owned.root); } catch { /* the startup sweep takes it if it is ours and orphaned */ }
+      unregisterTempDir(owned.root);
     }
   };
   return (node) => retryOnLocked(() => once(node));
