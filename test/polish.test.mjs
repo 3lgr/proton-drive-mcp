@@ -321,7 +321,7 @@ describe("elicitation for gated tools", () => {
   });
 
   // ---- what the human sees ----
-  it("long values keep head and tail, control characters are neutralised", async () => {
+  it("long values are shown in full and stay distinguishable", async () => {
     const a = "/trash/" + "A".repeat(300) + "-first.txt";
     const b = "/trash/" + "A".repeat(300) + "-second.txt";
     const seen = [];
@@ -331,8 +331,8 @@ describe("elicitation for gated tools", () => {
     });
     assert.match(seen[0], /-first\.txt/);
     assert.match(seen[1], /-second\.txt/);
-    assert.ok(seen[0].includes("…"));
-    assert.ok(seen[0].length < 700);
+    assert.ok(seen[0].includes(a), "the path under approval is shown in full, never shortened");
+    assert.ok(seen[0].length < 900);
     assert.notEqual(seen[0], seen[1]);
   });
 

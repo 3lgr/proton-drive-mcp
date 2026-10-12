@@ -145,4 +145,23 @@ describe("elicitation support: the human is asked even when the model says confi
     assert.match(msg, /\/my-files\/dest/);
     assert.match(msg, /content digest [0-9a-f]{16}/);
   });
+
+  it("the approval prompt escapes bidi/homograph characters and shows normalised values, one field per line", async () => {
+    const RLO = String.fromCodePoint(0x202e);
+    let msg = "";
+    await withElicitingClient(async (req) => { msg = req.params.message; return { action: "decline" }; }, async (client) => {
+      await client.callTool({ name: "drive_delete", arguments: { path: `/trash/invoice${RLO}gpj.exe`, confirmed: true } });
+      await client.callTool({ name: "drive_share_invite", arguments: { path: "/my-files/a", email: " Bob@\u0435xample.COM ", role: "editor", confirmed: true } });
+    });
+    // last prompt: the invitation. Canonical punycode e-mail, lower-case role, no raw Cyrillic and no extra lines.
+    assert.match(msg, /email: bob@xn--[a-z0-9-]+\.com/);
+    assert.match(msg, /role: editor/);
+    assert.ok(!/[\u0435\u202e]/.test(msg));
+    assert.ok(msg.split("\n").every((l) => !/\r/.test(l)));
+    let del = "";
+    await withElicitingClient(async (req) => { del = req.params.message; return { action: "decline" }; }, async (client) => {
+      await client.callTool({ name: "drive_delete", arguments: { path: `/trash/invoice${RLO}gpj.exe`, confirmed: true } });
+    });
+    assert.match(del, /Target: \/trash\/invoice\\u\{202e\}gpj\.exe/);
+  });
 });
