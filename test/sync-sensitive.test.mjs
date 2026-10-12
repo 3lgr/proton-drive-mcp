@@ -2,21 +2,42 @@
 // local-path tools: no writes into places that execute or reconfigure things, no reads of known secrets.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readSyncFile, writeSyncFile } from "../dist/utils/syncfs.js";
 import { makeSandbox, startServer } from "./helpers/mcp-client.mjs";
+import { activeOptOuts, SYNC_WRITE_ENV } from "../dist/utils/envFlag.js";
 
+// Allowlist: only inert data extensions, no dot-prefixed component. Everything below must be refused.
 const WRITE_REFUSED = [
-  "/my-files/proj/.git/hooks/pre-commit", "/my-files/proj/.git/config", "/my-files/.git/HEAD", "/my-files/a/b/.GIT/hooks/post-merge",
-  "/my-files/proj/.envrc", "/my-files/proj/.ENVRC", "/my-files/proj/.vscode/tasks.json", "/my-files/proj/.github/workflows/ci.yml",
-  "/my-files/proj/.husky/pre-commit", "/my-files/.ssh/authorized_keys", "/my-files/.zshrc", "/my-files/.bashrc", "/my-files/.profile",
-  "/my-files/proj/.env", "/my-files/proj/.env.production", "/my-files/id_rsa", "/my-files/server.pem", "/my-files/tls.key",
-  "/my-files/proj/.gitconfig", "/my-files/proj/.npmrc", "/my-files/.claude/settings.json", "/my-files/.mcp.json",
+  // places that run or reconfigure things
+  "/my-files/proj/.git/hooks/pre-commit", "/my-files/proj/.git/config", "/my-files/.git/HEAD", "/my-files/proj/.gitattributes", "/my-files/proj/.gitmodules",
+  "/my-files/proj/.envrc", "/my-files/proj/.vscode/tasks.json", "/my-files/proj/.github/workflows/ci.yml", "/my-files/proj/.husky/pre-commit",
+  "/my-files/.ssh/authorized_keys", "/my-files/.zshrc", "/my-files/.bashrc", "/my-files/.profile", "/my-files/proj/.npmrc", "/my-files/proj/.yarnrc",
+  "/my-files/proj/.pre-commit-config.yaml", "/my-files/.claude/settings.json", "/my-files/.mcp.json", "/my-files/proj/.idea/workspace.xml",
+  "/my-files/proj/.gitignore", "/my-files/proj/.github/CODEOWNERS",
+  // not an inert extension, or no extension at all
+  "/my-files/run.sh", "/my-files/run.SH", "/my-files/run.command", "/my-files/Makefile", "/my-files/justfile", "/my-files/tool", "/my-files/x.py",
+  "/my-files/x.plist", "/my-files/ws.code-workspace", "/my-files/server.pem", "/my-files/tls.key", "/my-files/id_rsa", "/my-files/a.exe",
+  "/my-files/Evil.app/Contents/notes.txt", "/my-files/x.workflow/notes.txt", "/my-files/Library/LaunchAgents/com.x.plist",
+  // inert extension but executed by tools, or secret by name
+  "/my-files/proj/package.json", "/my-files/proj/composer.json", "/my-files/proj/credentials.json", "/my-files/proj/terraform.tfstate",
+  // spelling tricks the file system folds away
+  "/my-files/p/.GIT/hooks/pre-commit", "/my-files/p/.Git/config", "/my-files/p/.git./config", "/my-files/p/.git /config", "/my-files/p/\uFF0Egit/hooks/x.txt",
+  "/my-files/p/.\u200Bgit/hooks/x.txt", "/my-files/p/\u2024git/config", "/my-files/notes.sh.", "/my-files/notes.sh ", "/my-files/notes.sh\u200B", "/my-files/x.txt:evil.sh",
+  "/my-files/.ENVRC", "/my-files/p/.Env.txt",
 ];
-const WRITE_OK = ["/my-files/notes.md", "/my-files/proj/.gitignore", "/my-files/proj/.github/CODEOWNERS", "/my-files/proj/src/envrc.txt", "/my-files/docs/git/hooks.md"];
-const READ_REFUSED = ["/my-files/proj/.env", "/my-files/proj/.env.local", "/my-files/id_ed25519", "/my-files/k.pem", "/my-files/.ssh/config", "/my-files/proj/.git/config", "/my-files/.netrc"];
+const WRITE_OK = [
+  "/my-files/notes.md", "/my-files/proj/src/envrc.txt", "/my-files/docs/git/hooks.md", "/my-files/data.json", "/my-files/REPORT.CSV", "/my-files/a b.tsv",
+  "/my-files/conf.yaml", "/my-files/conf.yml", "/my-files/app.log", "/my-files/f.xml", "/my-files/page.html", "/my-files/cafe\u0301.md", "/my-files/caf\u00e9.txt",
+  "/my-files/sh.txt", "/my-files/shell.sh.txt",
+];
+const READ_REFUSED = [
+  "/my-files/proj/.env", "/my-files/proj/.env.local", "/my-files/id_ed25519", "/my-files/k.pem", "/my-files/.ssh/config", "/my-files/proj/.git/config", "/my-files/.netrc",
+  "/my-files/proj/.ENV", "/my-files/proj/.env.", "/my-files/proj/.env ", "/my-files/ID_RSA", "/my-files/K.PEM", "/my-files/p/.GIT/config", "/my-files/.SSH/config",
+  "/my-files/\uFF0Eenv", "/my-files/.\u200Benv",
+];
 
 describe("N-02 sync folder: sensitive names and locations", () => {
   let root;
@@ -50,6 +71,20 @@ describe("N-02 sync folder: sensitive names and locations", () => {
       await assert.rejects(() => readSyncFile(root, p), /protected|sensitive|refus/i);
     });
   }
+  it("an overwrite never keeps or sets an executable bit", async () => {
+    const f = join(root, "mode.txt");
+    writeFileSync(f, "old", { mode: 0o755 });
+    chmodSync(f, 0o755);
+    await writeSyncFile(root, "/my-files/mode.txt", "new");
+    assert.equal(statSync(f).mode & 0o111, 0);
+    assert.equal(readFileSync(f, "utf8"), "new");
+  });
+  it("a symlinked PARENT is judged by where it points (and by its own spelling)", async () => {
+    mkdirSync(join(root, "real-hidden", ".config-d"), { recursive: true });
+    symlinkSync(join(root, "real-hidden", ".config-d"), join(root, "plainlink"));
+    await assert.rejects(() => writeSyncFile(root, "/my-files/plainlink/x.txt", "x"), /protected|sensitive|refus|hidden/i);
+    assert.equal(existsSync(join(root, "real-hidden", ".config-d", "x.txt")), false);
+  });
   it("an ordinary file is still readable", async () => {
     writeFileSync(join(root, "plain.txt"), "hello");
     assert.equal(await readSyncFile(root, "/my-files/plain.txt"), "hello");
@@ -84,5 +119,27 @@ describe("N-02 through the MCP tools", () => {
       assert.equal(r.isError, true);
       assert.doesNotMatch(r.text, /TOKEN=abc/);
     } finally { await c.close(); sb.cleanup(); rmSync(sync, { recursive: true, force: true }); }
+  });
+});
+
+describe("N-02 drive_write_file is off by default", () => {
+  it("without PROTON_DRIVE_ENABLE_SYNC_WRITE the tool refuses before touching anything", async () => {
+    const sync = mkdtempSync(join(tmpdir(), "syncsens-off-"));
+    const sb = makeSandbox();
+    const c = await startServer("json", sb, { PROTON_DRIVE_SYNC_PATH: sync, PROTON_DRIVE_ENABLE_SYNC_WRITE: "" });
+    try {
+      const w = await c.call("drive_write_file", { path: "/my-files/notes.txt", content: "hi", confirmed: true });
+      assert.equal(w.isError, true);
+      assert.match(w.text, /PROTON_DRIVE_ENABLE_SYNC_WRITE/);
+      assert.equal(existsSync(join(sync, "notes.txt")), false);
+      // reading stays available
+      writeFileSync(join(sync, "r.txt"), "readable");
+      assert.equal((await c.call("drive_read_file", { path: "/my-files/r.txt" })).isError, false);
+    } finally { await c.close(); sb.cleanup(); rmSync(sync, { recursive: true, force: true }); }
+  });
+  it("only the exact values 1/true enable it; the opt-in is listed for doctor", () => {
+    assert.equal(SYNC_WRITE_ENV, "PROTON_DRIVE_ENABLE_SYNC_WRITE");
+    for (const v of ["yes", "TRUE", "0", " 1", "on", ""]) assert.deepEqual(activeOptOuts({ [SYNC_WRITE_ENV]: v }), [], v);
+    for (const v of ["1", "true"]) assert.match(activeOptOuts({ [SYNC_WRITE_ENV]: v }).join("\n"), /PROTON_DRIVE_ENABLE_SYNC_WRITE/);
   });
 });

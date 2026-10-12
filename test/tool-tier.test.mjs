@@ -46,8 +46,9 @@ describe("tool tier", () => {
   // drive_read_content (+~800 bytes, also in core).
   // +~600 in 2.0.0: drive_invitation_accept is now gated (confirmed property + description).
   // +~200 in 2.0.1: photos_add_to_album is gated (confirmed property + description); upload/write_file say "or the destination is shared".
+  // +~120 more in 2.0.1: drive_write_file says it is off by default and which formats it writes.
   it("tools/list stays within the size budget", () => {
-    assert.ok(size(full) <= 41_300, `full ${size(full)} bytes`);
+    assert.ok(size(full) <= 41_500, `full ${size(full)} bytes`);
     assert.ok(size(core) <= 18_800, `core ${size(core)} bytes`);
   });
 

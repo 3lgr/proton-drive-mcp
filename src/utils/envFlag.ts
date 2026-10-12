@@ -6,11 +6,15 @@ export function envFlag(name: string, env: Readonly<Record<string, string | unde
   return v === "1" || v === "true";
 }
 
+/** drive_write_file is off unless the operator turns it on: a model that can write files can plant things other programs trust. */
+export const SYNC_WRITE_ENV = "PROTON_DRIVE_ENABLE_SYNC_WRITE";
+
 /** Every opt-out that relaxes a control and is currently switched on (for `doctor` and logs). */
 export const OPT_OUTS = [
   { env: "PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH", relaxes: "the local-path allowlist (any local path outside the denylist is reachable)" },
   { env: "PROTON_DRIVE_ALLOW_SENSITIVE_PATHS", relaxes: "the credential and secret-name denylist" },
   { env: "PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE", relaxes: "fail-closed consent for irreversible tools on clients without elicitation" },
+  { env: SYNC_WRITE_ENV, relaxes: "drive_write_file (off by default): the model may create or overwrite plain data files in the sync folder" },
 ] as const;
 
 export function activeOptOuts(env: Readonly<Record<string, string | undefined>> = process.env): string[] {

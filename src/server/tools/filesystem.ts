@@ -381,7 +381,7 @@ export const FILESYSTEM_TOOLS = [
   {
       name: "drive_write_file",
       description:
-        "Write text (max 5 MB) to a file in the local Proton Drive sync folder; no Proton login needed. Requires PROTON_DRIVE_SYNC_PATH; the desktop app must be running to sync it to the cloud. Creates parent directories locally. Refuses to overwrite an existing file unless confirmed=true — ask the user first. For binary content use drive_upload.",
+        "Write text (max 5 MB) to a plain data file (.txt .md .json .csv .tsv .yaml .yml .log .xml .html, no hidden folders) in the local Proton Drive sync folder; no Proton login needed. Disabled unless the operator sets PROTON_DRIVE_ENABLE_SYNC_WRITE=1. Requires PROTON_DRIVE_SYNC_PATH; the desktop app must be running to sync it to the cloud. Creates parent directories locally. Refuses to overwrite an existing file unless confirmed=true — ask the user first. For binary content use drive_upload.",
       annotations: { destructiveHint: true, openWorldHint: true },
       inputSchema: {
         type: "object",

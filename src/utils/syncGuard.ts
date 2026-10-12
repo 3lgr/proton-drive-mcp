@@ -1,63 +1,79 @@
-// N-02: the sync folder is a place whose files get executed or interpreted by other programs (git hooks, shell
-// rc files, editor tasks, CI workflows, agent settings) and a place secrets live. drive_write_file and
-// drive_read_file apply the same secret-name rule as the local-path tools, plus a list of locations that are never
-// written by default. Both a new file and an overwrite are refused. PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1 lifts it.
+// N-02: the sync folder is where files get executed or interpreted by other programs (git hooks, shell rc files,
+// editor tasks, CI workflows, build scripts, agent settings) and where secrets live. A denylist of such names can
+// never be complete, so WRITING is an allowlist: only inert data extensions, in paths with no dot-prefixed
+// component, never a name that looks like a secret. Everything else is refused, for a new file and for an
+// overwrite alike. READING refuses known secrets and credential folders. Names are folded before comparing
+// (Unicode compatibility form, case, invisible code points, trailing dots and spaces) because the file systems
+// that hold the sync folder do the same. PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1 lifts both rules.
 import { basename, relative, sep } from "node:path";
 import { isSecretName, isSensitiveLocation, sensitiveRulesEnabled } from "./localguard.js";
 
-// Directory chains (consecutive segments, anywhere in the path, case-insensitive).
-const NO_WRITE_DIRS: readonly (readonly string[])[] = [
-  [".git"], [".ssh"], [".gnupg"], [".aws"], [".kube"], [".docker"], [".vscode"], [".idea"], [".husky"], [".devcontainer"],
-  [".circleci"], [".github", "workflows"], [".github", "actions"], [".claude"], [".cursor"], [".config", "fish"],
-  ["library", "launchagents"], ["library", "launchdaemons"],
-];
-const NO_WRITE_NAMES: ReadonlySet<string> = new Set([
-  ".envrc", ".gitconfig", ".gitmodules", ".gitlab-ci.yml", ".pre-commit-config.yaml", "lefthook.yml", ".mcp.json",
-  ".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login", ".bash_logout",
-  ".profile", ".login", ".cshrc", ".tcshrc", ".kshrc", ".yarnrc", ".yarnrc.yml", "authorized_keys",
-]);
-// Directories whose files are read only by their owner tool: never useful as model context, often secret.
+/** Extensions of files that no common tool executes or loads as configuration by itself. */
+export const WRITABLE_EXTENSIONS: ReadonlySet<string> = new Set([".txt", ".md", ".json", ".csv", ".tsv", ".yaml", ".yml", ".log", ".xml", ".html"]);
+// Inert extension, but a tool runs them (npm scripts, composer scripts, deno tasks).
+const EXECUTED_NAMES: ReadonlySet<string> = new Set(["package.json", "composer.json", "deno.json", "deno.jsonc"]);
+// macOS bundles / launchers: a folder with one of these extensions is executable content.
+const BUNDLE_EXTENSIONS: ReadonlySet<string> = new Set([".app", ".workflow", ".action", ".command", ".bundle", ".plugin", ".kext", ".pkg", ".framework"]);
 const NO_READ_DIRS: readonly (readonly string[])[] = [[".ssh"], [".gnupg"], [".aws"], [".kube"], [".docker"], [".git", "config"]];
+// Code points that APFS/HFS+ and most renderers ignore: zero-width, bidi controls, BOM, soft hyphen.
+const INVISIBLE = /[­؜​-‏‪-‮⁠-⁩﻿]/g;
 
-function hasChain(segments: readonly string[], chain: readonly string[]): boolean {
-  for (let i = 0; i + chain.length <= segments.length; i++) {
-    if (chain.every((c, k) => segments[i + k] === c)) return true;
-  }
-  return false;
+/** One path component as the file system will compare it. */
+export function foldName(component: string): string {
+  return component.normalize("NFKC").replace(INVISIBLE, "").normalize("NFKC").toLowerCase().replace(/[.  ]+$/, "");
 }
 
-function segmentsOf(relPath: string): string[] {
-  return relPath.split(/[\\/]+/).filter((s) => s !== "" && s !== ".").map((s) => s.normalize("NFC").toLowerCase());
+function componentsOf(relPath: string): string[] {
+  // Split on both separators BEFORE folding: a fullwidth slash is not a separator, a backslash is on Windows.
+  return relPath.split(/[\\/]+/).filter((s) => s !== "" && s !== ".").map(foldName);
 }
+
+const extensionOf = (name: string): string => {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot) : "";
+};
 
 function refusal(action: "write" | "read", why: string): Error {
+  const hint = action === "write"
+    ? `drive_write_file only writes plain data files (${[...WRITABLE_EXTENSIONS].join(" ")}) in non-hidden folders`
+    : "known secrets and credential folders are not readable through the model";
   return new Error(
-    `refusing to ${action} ${why} in the sync folder. ` +
+    `refusing to ${action} ${why} in the sync folder; ${hint}. ` +
       `Set PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1 only if you accept that the model can ${action === "write" ? "plant files that other programs execute or trust" : "read your secrets"}.`,
   );
 }
 
-/** Throws when `relPath` (relative to the sync root, lexical or resolved) may not be written. */
+function assertWritableRel(rel: string): void {
+  const segs = componentsOf(rel);
+  const name = segs[segs.length - 1];
+  if (name === undefined) throw refusal("write", "an empty path");
+  if (segs.some((s) => s.startsWith("."))) throw refusal("write", "a hidden file or folder (a name starting with '.')");
+  if (segs.some((s) => s.includes(":"))) throw refusal("write", "a name containing ':'");
+  if (segs.slice(0, -1).some((s) => BUNDLE_EXTENSIONS.has(extensionOf(s)))) throw refusal("write", "inside an application bundle or launcher folder");
+  if (isSecretName(name)) throw refusal("write", "a file that looks like a credential or secret");
+  if (EXECUTED_NAMES.has(name)) throw refusal("write", "a file that tools execute (package scripts)");
+  if (!WRITABLE_EXTENSIONS.has(extensionOf(name))) throw refusal("write", "a file with an extension that is not a plain data format");
+}
+
+/** Throws when any of `relPaths` (relative to the sync root: the lexical spelling and the resolved one) may not be written. */
 export function assertSyncWritable(relPaths: readonly string[], fullPaths: readonly string[] = []): void {
   if (!sensitiveRulesEnabled()) return;
-  for (const rel of relPaths) {
-    const segs = segmentsOf(rel);
-    const name = segs[segs.length - 1] ?? "";
-    if (isSecretName(name)) throw refusal("write", "a file that looks like a credential or secret");
-    if (NO_WRITE_NAMES.has(name)) throw refusal("write", "a file that configures or runs other programs");
-    if (NO_WRITE_DIRS.some((c) => hasChain(segs.slice(0, -1), c))) throw refusal("write", "into a folder that configures or runs other programs");
-  }
+  for (const rel of relPaths) assertWritableRel(rel);
   for (const full of fullPaths) if (isSensitiveLocation(full, basename(full))) throw refusal("write", "into a protected location");
 }
 
-/** Throws when `relPath` names a known secret or a credential folder. */
+/** Throws when any of `relPaths` names a known secret or a credential folder. */
 export function assertSyncReadable(relPaths: readonly string[], fullPaths: readonly string[] = []): void {
   if (!sensitiveRulesEnabled()) return;
   for (const rel of relPaths) {
-    const segs = segmentsOf(rel);
+    const segs = componentsOf(rel);
     const name = segs[segs.length - 1] ?? "";
     if (isSecretName(name)) throw refusal("read", "a file that looks like a credential or secret");
-    if (NO_READ_DIRS.some((c) => hasChain(segs, c))) throw refusal("read", "a credential or repository-config file");
+    for (const chain of NO_READ_DIRS) {
+      for (let i = 0; i + chain.length <= segs.length; i++) {
+        if (chain.every((c, k) => segs[i + k] === c)) throw refusal("read", "a credential or repository-config file");
+      }
+    }
   }
   for (const full of fullPaths) if (isSensitiveLocation(full, basename(full))) throw refusal("read", "a file in a protected location");
 }
@@ -66,4 +82,3 @@ export function assertSyncReadable(relPaths: readonly string[], fullPaths: reado
 export function relUnder(root: string, target: string): string {
   return relative(root, target).split(sep).join("/");
 }
-

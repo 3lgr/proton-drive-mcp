@@ -196,6 +196,7 @@ export async function writeSyncFile(
     if (!(await fh.stat()).isFile()) {
       throw new Error(`${remotePath} is not a regular file.`);
     }
+    await fh.chmod(0o644); // N-02: data only, never an executable bit (an overwrite keeps the old mode otherwise)
     await fh.writeFile(content, "utf8");
   } finally {
     await fh.close();
