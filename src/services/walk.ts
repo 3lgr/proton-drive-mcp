@@ -406,7 +406,7 @@ function persist(svc: DriveService, p: WalkParams, w: RawWalk, startSeq: number)
         diskVerified = { at: Date.now(), ctl: new AbortController(), promise: Promise.resolve("match") }; // saved under the live drive's own account key
       }
     } catch (err) {
-      logger.warn("Persistent walk index not updated:", err instanceof Error ? err.message : String(err));
+      logger.warn("Persistent walk index not updated:", err);
     }
   });
 }
@@ -440,7 +440,7 @@ function startRefresh(svc: DriveService, p: WalkParams): boolean {
     .catch((err) => {
       if (controller.signal.aborted) return;
       refreshFailedAt.set(p.key, Date.now());
-      logger.warn("Background walk refresh failed:", err instanceof Error ? err.message : String(err));
+      logger.warn("Background walk refresh failed:", err);
     })
     .finally(() => { if (refreshes.get(p.key) === rec) refreshes.delete(p.key); });
   return true;

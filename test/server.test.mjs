@@ -502,7 +502,8 @@ describe("CLI output handling and error sanitization", () => {
       const r = await c.call("drive_share_set_url", { path: P, password: SECRET, confirmed: true });
       assert.equal(r.isError, true);
       assert.ok(!r.text.includes(SECRET), `password leaked: ${r.text}`);
-      assert.match(r.text, /--password \*\*\*/);
+      assert.doesNotMatch(r.text, /--password/, "argv echoed by the CLI is withheld, not masked");
+      assert.match(r.text, /\[CLI_FAILED\].*withheld: \u00abstr:len=\d+ id=[0-9a-f]{4}\u00bb/);
     }));
 
   it("masks --message content echoed by the CLI", () =>
@@ -516,7 +517,8 @@ describe("CLI output handling and error sanitization", () => {
     withServer("fail-stdout-crash", {}, async (c) => {
       const r = await c.call("drive_info", { path: P });
       assert.equal(r.isError, true);
-      assert.match(r.text, /ENOENT: no such file or directory/);
+      assert.match(r.text, /\[LOCAL_FILE\]/);
+      assert.doesNotMatch(r.text, /\/nowhere\/file\.bin/, "the path the CLI printed is withheld");
       assert.ok(!r.text.includes("====="), "banner should be dropped");
     }));
 
@@ -524,8 +526,9 @@ describe("CLI output handling and error sanitization", () => {
     withServer("big-stderr", {}, async (c) => {
       const r = await c.call("drive_info", { path: P }, { timeout: 20_000 });
       assert.equal(r.isError, true);
-      assert.ok(r.text.length < 2000, `length ${r.text.length}`);
-      assert.match(r.text, /line 0/);
+      assert.ok(r.text.length < 600, `length ${r.text.length}`);
+      assert.match(r.text, /withheld/);
+      assert.doesNotMatch(r.text, /line 0/);
     }));
 
   it("auth-fail maps to the not-authenticated message", () =>

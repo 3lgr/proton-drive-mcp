@@ -143,7 +143,8 @@ exit 1
     process.env.PROTON_DRIVE_BIN = bin;
     const { runDrive } = await import(`../dist/utils/subprocess.js?noise`);
     await assert.rejects(() => runDrive(["filesystem", "info", "/x"]), (e) => {
-      assert.match(e.message, /Error decrypting session keys/);
+      assert.match(e.message, /\[CLI_FAILED\]/);
+      assert.doesNotMatch(e.message, /Error decrypting session keys/, "the CLI's words are withheld");
       assert.ok(!/20075 \||decryptSessionKeys\(keys\)|Error details|\{\}|^\s*\^/m.test(e.message), e.message);
       return true;
     });
