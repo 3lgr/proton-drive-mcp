@@ -82,7 +82,6 @@ async function downloadBytes(drive: DriveService, path: string, cap: number): Pr
   const dir = await mkdtemp(join(tmpdir(), "pdmcp-read-"));
   registerTempDir(dir);
   try {
-    validateLocalPath(dir);
     const outer = callContext.getStore()?.signal;
     const controller = new AbortController();
     const relay = (): void => controller.abort();

@@ -228,7 +228,6 @@ export function makeDriveHasher(drive: DriveService): Hasher {
     const dir = await mkdtemp(join(tmpdir(), "pdmcp-dup-"));
     registerTempDir(dir);
     try {
-      validateLocalPath(dir); // same local-path rules as drive_download
       const r = await safeDownload(drive, freezeDownload({ remotePath: node.path, localPath: dir, fileStrategy: "rename", folderStrategy: "skip" }), { transient: true });
       if (r.failed > 0 || r.downloaded < 1) throw new Error("download failed");
       const [name, ...more] = await readdir(dir);

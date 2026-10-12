@@ -7,6 +7,7 @@ import { approvalField } from "../../policy/untrusted.js";
 import { assertMutablePath } from "../../policy/remoteRoots.js";
 import type { Handler } from "../context.js";
 import { ok, fail } from "../result.js";
+import { anyLocalPathAllowed, assertSyncRootUsable } from "../../utils/localguard.js";
 
 export const contentHandlers: Record<string, Handler> = {
   drive_read_content: async (a, { drive }) => {
@@ -15,6 +16,7 @@ export const contentHandlers: Record<string, Handler> = {
   drive_read_file: async (a) => {
     const syncRoot = getSyncRoot();
     if (!syncRoot) return fail("PROTON_DRIVE_SYNC_PATH is not set. Set it to the root of your Proton Drive sync folder.");
+    if (!anyLocalPathAllowed()) assertSyncRootUsable(syncRoot); // same root rules as every other local path
     const readPath = validateRemotePath(a.path);
     const content = await readSyncFile(syncRoot, readPath);
     return ok({ path: readPath, content });
@@ -22,6 +24,7 @@ export const contentHandlers: Record<string, Handler> = {
   drive_write_file: async (a, { gate }) => {
     const syncRoot = getSyncRoot();
     if (!syncRoot) return fail("PROTON_DRIVE_SYNC_PATH is not set. Set it to the root of your Proton Drive sync folder.");
+    if (!anyLocalPathAllowed()) assertSyncRootUsable(syncRoot);
     if (typeof a.content !== "string") return fail("content must be a string");
     const writePath = validateRemotePath(a.path);
     assertMutablePath(writePath, "write");
