@@ -13,6 +13,7 @@ import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, Drive
 import { checkCliAvailable } from "./utils/subprocess.js";
 import { runDoctor, formatDoctor } from "./utils/doctor.js";
 import { buildEntry, defaultConfigPath, isDirectory, resolveDriveCli, writeEntry, SERVER_KEY } from "./utils/claudeConfig.js";
+import { sha256File } from "./utils/binaryIntegrity.js";
 import { syncPlan, planBulkMove, planBulkTrash, loadListing, foldersToList, type Direction, type Compare } from "./services/plan.js";
 import { invalidatePath } from "./services/walk.js";
 import { indexStatus, deleteIndex } from "./services/walkIndex.js";
@@ -100,9 +101,11 @@ Commands:
 
   doctor [--config <path>]                 Read-only diagnostics: Node, proton-drive CLI, auth, sync path, Claude Desktop config
                                            (exit 1 if any check fails)
-  setup-claude-desktop [--config <path>] [--sync-path <dir>] [--write]
+  setup-claude-desktop [--config <path>] [--sync-path <dir>] [--write] [--pin]
                                            Print the Claude Desktop entry for this server (dry run); --write adds it to the
-                                           config (timestamped backup first). Restart Claude Desktop afterwards.
+                                           config (timestamped backup first). --pin also records the sha256 of the resolved
+                                           CLI binary as PROTON_DRIVE_BIN_SHA256 in the entry (re-run after a CLI upgrade).
+                                           Restart Claude Desktop afterwards.
 
 Flags:
   --json                                   Machine-readable JSON output (one line)
@@ -176,7 +179,7 @@ function print(data: unknown) {
   console.log(jsonMode ? JSON.stringify(data) : JSON.stringify(data, null, 2));
 }
 
-function setupClaudeDesktop() {
+async function setupClaudeDesktop() {
   const configPath = resolve(getFlag("--config") ?? defaultConfigPath());
   const rawSync = getFlag("--sync-path");
   const cliPath = resolveDriveCli();
@@ -189,14 +192,20 @@ function setupClaudeDesktop() {
     console.error(`Error: --sync-path ${syncPath} is not an existing directory.`);
     process.exit(1);
   }
-  const entry = buildEntry(cliPath, syncPath);
+  let pin: string | undefined;
+  if (args.includes("--pin")) {
+    try { pin = await sha256File(cliPath); }
+    catch { console.error(`Error: could not read ${cliPath} to compute its sha256.`); process.exit(1); }
+  }
+  const entry = buildEntry(cliPath, syncPath, pin);
   const shown = JSON.stringify({ mcpServers: { [SERVER_KEY]: entry } }, null, 2);
+  const pinNote = pin ? `Pinned: PROTON_DRIVE_BIN_SHA256 is the sha256 of ${cliPath} as it is now; only pin a binary you got from Proton.\n` : "";
   if (!args.includes("--write")) {
-    console.log(`Dry run: nothing changed. Would set this entry in ${configPath}:\n${shown}\nRe-run with --write to apply.`);
+    console.log(`Dry run: nothing changed. Would set this entry in ${configPath}:\n${shown}\n${pinNote}Re-run with --write to apply.`);
     return;
   }
   const backup = writeEntry(configPath, entry);
-  console.log(`Wrote ${SERVER_KEY} to ${configPath}${backup ? ` (backup: ${backup})` : ""}.\n${shown}\nFully quit and restart Claude Desktop for the change to take effect.`);
+  console.log(`Wrote ${SERVER_KEY} to ${configPath}${backup ? ` (backup: ${backup})` : ""}.\n${shown}\n${pinNote}Fully quit and restart Claude Desktop for the change to take effect.`);
 }
 
 async function run() {
@@ -225,7 +234,7 @@ async function run() {
   }
 
   if (cmd === "setup-claude-desktop") {
-    setupClaudeDesktop();
+    await setupClaudeDesktop();
     return;
   }
 

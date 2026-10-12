@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { DriveService } from "../services/drive.js";
 import { runDriveRaw } from "./subprocess.js";
 import { cliCompatWarning, TESTED_CLI_LABEL } from "./cliVersion.js";
-import { binaryRisks, expectedSha256, trustedBinary, HASH_ENV, BIN_ENV } from "./binaryIntegrity.js";
+import { binaryRisks, expectedSha256, parseSha256, sha256File, trustedBinary, HASH_ENV, BIN_ENV } from "./binaryIntegrity.js";
 import { activeOptOuts } from "./envFlag.js";
 import { describeRoots, validateRoot, DEFAULT_ROOT_NAME, ANY_LOCAL_ENV } from "./localguard.js";
 import { defaultConfigPath, isDirectory, isExecutableFile, resolveBinary, resolveDriveCli, SERVER_KEY } from "./claudeConfig.js";
@@ -25,7 +25,27 @@ function nodeCheck(): Check {
     : { id: "node", status: "fail", message: `Node ${process.versions.node} (need >= 22)`, hint: "Install Node 22 or newer." };
 }
 
-async function cliChecks(): Promise<{ checks: Check[]; cliPath?: string }> {
+interface EntryEnv { key: string; bin?: string; sha?: string; env: { PROTON_DRIVE_BIN?: unknown; PROTON_DRIVE_SYNC_PATH?: unknown }; command: string }
+
+/** Our own entry in the Claude Desktop config (never any other server's), or undefined when absent or unreadable. */
+function findEntry(configPath: string): EntryEnv | undefined {
+  let servers: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as { mcpServers?: unknown };
+    if (parsed.mcpServers && typeof parsed.mcpServers === "object" && !Array.isArray(parsed.mcpServers)) servers = parsed.mcpServers as Record<string, unknown>;
+  } catch { return undefined; }
+  const key = SERVER_KEY in servers ? SERVER_KEY : Object.keys(servers).find((k) => {
+    const a = (servers[k] as { args?: unknown } | null)?.args;
+    return Array.isArray(a) && a.some((x) => typeof x === "string" && x.includes(SERVER_KEY));
+  });
+  if (!key) return undefined;
+  const e = servers[key] as { command?: unknown; env?: Record<string, unknown> } | null;
+  const env = e?.env && typeof e.env === "object" ? e.env : {};
+  const sha = env[HASH_ENV];
+  return { key, env, command: typeof e?.command === "string" ? e.command : "", bin: typeof env[BIN_ENV] === "string" && env[BIN_ENV] ? env[BIN_ENV] as string : undefined, sha: typeof sha === "string" ? sha : undefined };
+}
+
+async function cliChecks(entry?: EntryEnv): Promise<{ checks: Check[]; cliPath?: string }> {
   const cliPath = resolveDriveCli();
   if (!cliPath) {
     const bin = process.env["PROTON_DRIVE_BIN"];
@@ -60,16 +80,35 @@ async function cliChecks(): Promise<{ checks: Check[]; cliPath?: string }> {
   } catch (e) {
     checks.push({ id: "auth", status: "fail", message: `Authentication probe failed: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`, hint: "Run `proton-drive auth status` to investigate." });
   }
-  checks.push(...await integrityChecks(cliPath));
+  checks.push(...await integrityChecks(cliPath, entry));
   return { checks, cliPath };
 }
 
 // S-01: where the binary comes from, who could replace it, and whether it is pinned.
-async function integrityChecks(cliPath: string): Promise<Check[]> {
+const REPIN_HINT = "If you upgraded the CLI on purpose, re-pin it: `proton-drive-cli setup-claude-desktop --write --pin`; otherwise reinstall the official CLI.";
+
+/** The pin stored in the Claude Desktop entry (the one the server actually runs with) against the entry's binary. */
+async function entryPinCheck(id: string, cliPath: string, entry: EntryEnv): Promise<Check> {
+  let want: string | undefined;
+  try { want = parseSha256(entry.sha); }
+  catch { return { id, status: "fail", message: `${HASH_ENV} in the Claude Desktop entry is not 64 hexadecimal characters`, hint: "Run `proton-drive-cli setup-claude-desktop --write --pin`." }; }
+  if (!want) return { id, status: "warn", message: `the binary is not pinned (${cliPath})`, hint: `Set ${HASH_ENV} to its sha256 (shasum -a 256 <path>) or run \`proton-drive-cli setup-claude-desktop --write --pin\`.` };
+  const target = entry.bin && isExecutableFile(entry.bin) ? entry.bin : cliPath;
+  let got: string;
+  try { got = await sha256File(target); }
+  catch { return { id, status: "fail", message: `${target} could not be read to verify the pin in the Claude Desktop entry`, hint: REPIN_HINT }; }
+  return got === want
+    ? { id, status: "ok", message: `sha256 of ${target} matches ${HASH_ENV} in the Claude Desktop entry` }
+    : { id, status: "fail", message: `sha256 of ${target} does not match ${HASH_ENV} in the Claude Desktop entry (got ${got.slice(0, 12)}…); the server would refuse to run it`, hint: REPIN_HINT };
+}
+
+async function integrityChecks(cliPath: string, entry?: EntryEnv): Promise<Check[]> {
   const out: Check[] = [];
   let pinned: string | undefined;
   try { pinned = expectedSha256(); }
   catch (e) { return [{ id: "cli-integrity", status: "fail", message: e instanceof Error ? e.message : String(e), hint: `Fix ${HASH_ENV}.` }]; }
+  const entryPinned = entry?.sha !== undefined && entry.sha.trim() !== "";
+  if (entry && entryPinned) out.push(await entryPinCheck(pinned ? "cli-integrity-entry" : "cli-integrity", cliPath, entry));
   if (pinned) {
     try {
       await trustedBinary();
@@ -77,7 +116,7 @@ async function integrityChecks(cliPath: string): Promise<Check[]> {
     } catch (e) {
       out.push({ id: "cli-integrity", status: "fail", message: e instanceof Error ? e.message : String(e), hint: "Reinstall the official CLI, or update the pinned hash if you upgraded it on purpose." });
     }
-  } else {
+  } else if (!entryPinned) {
     out.push({ id: "cli-integrity", status: "warn", message: `the binary is not pinned (${cliPath})`, hint: `Set ${HASH_ENV} to its sha256 (shasum -a 256 <path>) so a replaced binary is refused.` });
   }
   for (const r of binaryRisks(cliPath)) {
@@ -120,28 +159,18 @@ function configCheck(configPath: string, cliPath: string | undefined): Check {
   if (!existsSync(configPath)) {
     return { id, status: "warn", message: `Config not found: ${configPath}`, hint: `If you use Claude Desktop: ${SETUP_HINT}` };
   }
-  let servers: Record<string, unknown> = {};
-  try {
-    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as { mcpServers?: unknown };
-    if (parsed.mcpServers && typeof parsed.mcpServers === "object" && !Array.isArray(parsed.mcpServers)) servers = parsed.mcpServers as Record<string, unknown>;
-  } catch {
-    return { id, status: "fail", message: `${configPath} is not valid JSON`, hint: "Fix the JSON syntax; Claude Desktop ignores an unparsable config." };
-  }
+  try { JSON.parse(readFileSync(configPath, "utf8")); }
+  catch { return { id, status: "fail", message: `${configPath} is not valid JSON`, hint: "Fix the JSON syntax; Claude Desktop ignores an unparsable config." }; }
   // Only our own entry is ever inspected or reported: other servers' entries hold secrets.
-  const key = SERVER_KEY in servers ? SERVER_KEY : Object.keys(servers).find((k) => {
-    const a = (servers[k] as { args?: unknown } | null)?.args;
-    return Array.isArray(a) && a.some((x) => typeof x === "string" && x.includes(SERVER_KEY));
-  });
-  if (!key) {
+  const found = findEntry(configPath);
+  if (!found) {
     return { id, status: "warn", message: `No proton-drive-mcp entry in ${configPath}`, hint: SETUP_HINT };
   }
-  const entry = servers[key] as { command?: unknown; env?: { PROTON_DRIVE_BIN?: unknown; PROTON_DRIVE_SYNC_PATH?: unknown } } | null;
-  const command = typeof entry?.command === "string" ? entry.command : "";
+  const { key, command, bin, env } = found;
   if (!command || !resolveBinary(command)) {
     return { id, status: "fail", message: `Entry "${key}": command ${command ? `"${command}" ` : ""}does not resolve to an executable`, hint: `Use an absolute path for command. ${SETUP_HINT}` };
   }
-  const bin = entry?.env?.PROTON_DRIVE_BIN;
-  if (typeof bin === "string" && bin) {
+  if (bin) {
     if (!isExecutableFile(bin)) {
       return { id, status: "fail", message: `Entry "${key}": PROTON_DRIVE_BIN=${bin} is not an executable file`, hint: SETUP_HINT };
     }
@@ -152,13 +181,14 @@ function configCheck(configPath: string, cliPath: string | undefined): Check {
       hint: `Claude Desktop probably will not find the CLI. ${SETUP_HINT}`,
     };
   }
-  const sync = typeof entry?.env?.PROTON_DRIVE_SYNC_PATH === "string" ? `, PROTON_DRIVE_SYNC_PATH=${entry.env.PROTON_DRIVE_SYNC_PATH}` : "";
-  return { id, status: "ok", message: `Entry "${key}" in ${configPath} looks good${typeof bin === "string" ? ` (PROTON_DRIVE_BIN=${bin}${sync})` : ""}` };
+  const sync = typeof env.PROTON_DRIVE_SYNC_PATH === "string" ? `, PROTON_DRIVE_SYNC_PATH=${env.PROTON_DRIVE_SYNC_PATH}` : "";
+  return { id, status: "ok", message: `Entry "${key}" in ${configPath} looks good${bin ? ` (PROTON_DRIVE_BIN=${bin}${sync})` : ""}` };
 }
 
 export async function runDoctor(configPath?: string): Promise<{ ok: boolean; checks: Check[] }> {
   const checks: Check[] = [nodeCheck()];
-  const cli = await cliChecks();
+  const cfgPath = configPath ? resolve(configPath) : defaultConfigPath();
+  const cli = await cliChecks(existsSync(cfgPath) ? findEntry(cfgPath) : undefined);
   checks.push(...cli.checks);
   checks.push(localRootCheck());
   const opts = activeOptOuts();
@@ -167,7 +197,7 @@ export async function runDoctor(configPath?: string): Promise<{ ok: boolean; che
     : { id: "opt-outs", status: "warn", message: `${opts.length} opt-out(s) active: ${opts.join("; ")}`, hint: "Each one is a deliberate relaxation; unset it unless you need it." });
   const sync = syncPathCheck();
   if (sync) checks.push(sync);
-  checks.push(configCheck(configPath ? resolve(configPath) : defaultConfigPath(), cli.cliPath));
+  checks.push(configCheck(cfgPath, cli.cliPath));
   return { ok: !checks.some((c) => c.status === "fail"), checks };
 }
 
