@@ -37,7 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
-import { UNTRUSTED_TOOLS, wrapUntrusted, sanitizeMessage, sanitizeDeep, sanitizeString, newStats } from "./policy/untrusted.js";
+import { UNTRUSTED_TOOLS, wrapUntrusted, sanitizeMessage, sanitizeDeep, sanitizeString, newStats, approvalField } from "./policy/untrusted.js";
 import { loadSharePolicy, checkInvite, checkPublicLink } from "./policy/sharePolicy.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
 import { precheckUpload, withUploadSnapshot } from "./services/uploadSnapshot.js";
@@ -1152,15 +1152,15 @@ export function resolveTier(raw: string | undefined): "full" | "core" {
 export { showValue };
 
 export function describeArgs(args: Record<string, unknown>): string {
-  return Object.entries(args).filter(([k]) => k !== "confirmed").map(([k, v]) => {
-    if (Array.isArray(v)) return `${k}: ${v.slice(0, 5).map((x) => showValue(x)).join(" | ")}${v.length > 5 ? ` (+${v.length - 5} more)` : ""}`;
-    return `${k}: ${showValue(v)}`;
-  }).join("\n");
+  // One line per field (and per list item); values are rendered with every non-ASCII character escaped, never shortened.
+  return Object.entries(args).filter(([k]) => k !== "confirmed" && args[k] !== undefined).flatMap(([k, v]) =>
+    Array.isArray(v) ? v.map((x, i) => `${k}[${i}]: ${approvalField(x)}`) : [`${k}: ${approvalField(v)}`],
+  ).join("\n");
 }
 
 function bulkPrompt(tool: string, verb: string, paths: string[], destination?: string): string {
-  return `${tool} needs your approval. ${verb} ${paths.length} item(s)${destination ? ` into ${showValue(destination)}` : ""}.\n` +
-    paths.slice(0, 5).map((p) => `- ${showValue(p)}`).join("\n") + (paths.length > 5 ? `\n(+${paths.length - 5} more)` : "");
+  return `${tool} needs your approval. ${verb} ${paths.length} item(s)${destination ? ` into ${approvalField(destination)}` : ""}.\n` +
+    paths.map((p) => `- ${approvalField(p)}`).join("\n");
 }
 
 // The SDK's prompts/get schema types arguments as string-only, and a violation surfaces as -32603.
@@ -1314,7 +1314,7 @@ export async function main() {
               approved: [approvedUpload],
               approve: (m) => gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 },
                 `drive_upload needs your approval. It ${GATES.drive_upload!.consequence}\n` +
-                `Sending ${m.files} file(s), ${m.bytes} bytes from ${showValue(uploadLocal)} to ${showValue(uploadRemote)} (content digest ${m.digest.slice(0, 16)})\n` +
+                `Sending ${m.files} file(s), ${m.bytes} bytes from ${approvalField(uploadLocal)} to ${approvalField(uploadRemote)} (content digest ${m.digest.slice(0, 16)})\n` +
                 `fileConflictStrategy: ${fcs}\nfolderConflictStrategy: ${dcs2}`),
             },
           );
@@ -1358,7 +1358,7 @@ export async function main() {
         case "drive_delete": {
           const deletePath = a.path === undefined ? undefined : validateRemotePath(a.path);
           const deleteUid = a.uid ? validateFlagValue(a.uid as string, "uid") : undefined;
-          await gate("drive_delete", a, `drive_delete needs your approval. It ${GATES.drive_delete!.consequence}\nTarget: ${showValue(deletePath ?? `uid ${deleteUid}`)}`);
+          await gate("drive_delete", a, `drive_delete needs your approval. It ${GATES.drive_delete!.consequence}\nTarget: ${approvalField(deletePath ?? `uid ${deleteUid}`)}`);
           await drive.delete(deletePath, deleteUid);
           return ok({ message: `Deleted: ${deletePath ?? `uid ${deleteUid}`}` });
         }
@@ -1638,7 +1638,7 @@ export async function main() {
           const writePath = validateRemotePath(a.path);
           assertMutablePath(writePath, "write");
           if (await syncFileExists(syncRoot, writePath)) {
-            await gate("drive_write_file", a, `drive_write_file needs your approval. It ${GATES.drive_write_file!.consequence}\nTarget: ${showValue(writePath)}`);
+            await gate("drive_write_file", a, `drive_write_file needs your approval. It ${GATES.drive_write_file!.consequence}\nTarget: ${approvalField(writePath)}`);
           }
           await writeSyncFile(syncRoot, writePath, a.content);
           return ok({ message: `Written: ${writePath}` });
