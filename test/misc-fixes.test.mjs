@@ -141,7 +141,7 @@ exit 1
   after(() => rmSync(dir, { recursive: true, force: true }));
   it("keeps the real error line and drops bundled source and empty details", async () => {
     process.env.PROTON_DRIVE_BIN = bin;
-    const { runDrive } = await import(`../dist/utils/subprocess.js?noise`);
+    const { runDrive } = await import("../dist/utils/subprocess.js"); // no ?query: a second URL for the same file makes node's coverage report drop the other processes' data for it
     await assert.rejects(() => runDrive(["filesystem", "info", "/x"]), (e) => {
       assert.match(e.message, /\[CLI_FAILED\]/);
       assert.doesNotMatch(e.message, /Error decrypting session keys/, "the CLI's words are withheld");
