@@ -2,7 +2,7 @@
 // window in which the tree changes (or the CLI sees something the scanner did not). So the tree is validated with
 // lstat (links never followed), copied file by file into a private 0700 snapshot, and the CLI uploads the snapshot.
 // planUploadSnapshot() is pure; the executor performs only what it returns. Any error refuses the call.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, utimesSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, utimesSync } from "node:fs";
 import { createReadStream, createWriteStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
@@ -135,7 +135,7 @@ async function sha256File(path: string): Promise<string> {
 }
 
 /** Immediately before the CLI is started: the snapshot must still be exactly what was copied, nothing more or less. */
-async function verifySnapshot(holder: string, name: string, actions: readonly SnapshotAction[], copied: ReadonlyMap<string, CopiedFile>): Promise<void> {
+async function verifySnapshot(holder: string, name: string, actions: readonly SnapshotAction[], copied: ReadonlyMap<string, CopiedFile>): Promise<ManifestFile[]> {
   const top = readdirSync(holder);
   if (top.length !== 1 || top[0] !== name) throw new Error("refusing to upload: the snapshot was modified (unexpected top-level entries)");
   if (actions.some((a) => a.op === "mkdir" && a.rel === "")) {
@@ -150,18 +150,71 @@ async function verifySnapshot(holder: string, name: string, actions: readonly Sn
     walk(join(holder, name), "");
     if (expected.size > 0) throw new Error("refusing to upload: the snapshot was modified (entries are missing)");
   }
+  const fresh: ManifestFile[] = [];
   for (const [rel, c] of copied) {
     const st = lstatSync(c.dst);
     if (!st.isFile() || st.nlink !== 1 || st.size !== c.size || st.dev !== c.dev || st.ino !== c.ino || st.mtimeMs !== c.mtimeMs) {
       throw new Error(`refusing to upload: the snapshot was modified (${showValue(rel, 80, 30)})`);
     }
-    if ((await sha256File(c.dst)) !== c.sha256) throw new Error(`refusing to upload: the snapshot was modified (${showValue(rel, 80, 30)} content)`);
+    const sha256 = await sha256File(c.dst);
+    if (sha256 !== c.sha256) throw new Error(`refusing to upload: the snapshot was modified (${showValue(rel, 80, 30)} content)`);
+    fresh.push({ rel, size: c.size, sha256 });
   }
+  return fresh;
+}
+
+export interface ManifestFile { readonly rel: string; readonly size: number; readonly sha256: string }
+export interface UploadManifest {
+  readonly files: number;
+  readonly bytes: number;
+  /** sha256 over the ordered (path, size, sha256) list of every snapshotted file, one set per uploaded path. */
+  readonly digest: string;
+}
+
+/** Deterministic digest of the frozen content: what is approved is exactly this, nothing else. */
+export function manifestOf(perPath: readonly (readonly ManifestFile[])[]): UploadManifest {
+  const h = createHash("sha256");
+  let files = 0;
+  let bytes = 0;
+  perPath.forEach((list, i) => {
+    for (const f of [...list].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))) {
+      h.update(`${i}\0${f.rel}\0${f.size}\0${f.sha256}\n`);
+      files++;
+      bytes += f.size;
+    }
+  });
+  return { files, bytes, digest: h.digest("hex") };
+}
+
+/** Makes the snapshot read-only (files 0400, folders 0500) so that nothing changes it quietly after approval. */
+function freeze(root: string): void {
+  const walk = (p: string): void => {
+    const st = lstatSync(p);
+    if (st.isDirectory()) { for (const n of readdirSync(p)) walk(join(p, n)); chmodSync(p, 0o500); }
+    else if (st.isFile()) chmodSync(p, 0o400);
+  };
+  walk(root);
+}
+
+function thaw(root: string): void {
+  const walk = (p: string): void => {
+    let st;
+    try { st = lstatSync(p); } catch { return; }
+    if (!st.isDirectory()) return;
+    try { chmodSync(p, 0o700); } catch { /* removal below reports it */ }
+    for (const n of readdirSync(p)) walk(join(p, n));
+  };
+  walk(root);
 }
 
 export interface SnapshotOptions {
   /** Plans (manifests) returned by precheckUpload, one per path: the fresh scan must match them exactly. */
   approved?: readonly (readonly SnapshotAction[])[];
+  /**
+   * Called once the snapshot is complete, frozen and summarised, before anything is sent. Throw to refuse. The
+   * snapshot is re-hashed after this returns, so whatever happens while a human decides cannot slip through.
+   */
+  approve?: (manifest: UploadManifest) => Promise<void>;
   /** Test seams (fault injection): run after the scan, before each copy / right before `fn`. */
   hooks?: { beforeCopy?: (rel: string, source: string) => void; beforeSpawn?: (snapshotPaths: readonly string[]) => void };
 }
@@ -182,7 +235,7 @@ export async function withUploadSnapshot<T>(
   registerTempDir(stage);
   try {
     const out: string[] = [];
-    const verifiers: Array<() => Promise<void>> = [];
+    const verifiers: Array<() => Promise<ManifestFile[]>> = [];
     let total = 0;
     for (let i = 0; i < localPaths.length; i++) {
       const src = localPaths[i] as string;
@@ -207,10 +260,17 @@ export async function withUploadSnapshot<T>(
       verifiers.push(() => verifySnapshot(holder, basename(src), actions, copied));
       out.push(dst);
     }
+    // Freeze, summarise, let the caller (human/policy) approve THAT manifest, then recompute and compare.
+    const frozen = manifestOf(await Promise.all(verifiers.map((v) => v())));
+    freeze(stage);
+    if (opts.approve) await opts.approve(frozen);
     opts.hooks?.beforeSpawn?.(out);
-    for (const v of verifiers) await v();
+    const again = manifestOf(await Promise.all(verifiers.map((v) => v())));
+    if (again.digest !== frozen.digest || again.files !== frozen.files || again.bytes !== frozen.bytes) {
+      throw new Error("refusing to upload: the snapshot changed after it was approved; ask for approval again");
+    }
     return await fn(out);
   } finally {
-    try { rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
+    try { thaw(stage); rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
   }
 }

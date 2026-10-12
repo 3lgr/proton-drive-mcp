@@ -1,7 +1,6 @@
 import { isAbsolute } from "node:path";
+import { domainToASCII } from "node:url";
 import { assertLocalPathAllowed } from "./localguard.js";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Control chars: 0x00-0x1F, DEL (0x7F), Unicode separators U+2028 and U+2029.
 const CONTROL_RE = new RegExp("[\\x00-\\x1f\\x7f\\u2028\\u2029]");
@@ -99,10 +98,37 @@ export function validateLocalPath(path: unknown, opts: { scan?: boolean } = {}):
   return p;
 }
 
+// Strict, single-form e-mail: exactly one '@', a dot-atom ASCII local part, a registrable-looking domain converted
+// to its IDNA/punycode form and lower-cased. Everything the CLI or a mail system could read differently (lists,
+// quoted local parts, comments, display names, extra '@', non-ASCII local parts, whitespace) is rejected, and the
+// caller must pass the RETURNED value onwards, never the raw input.
+// Deliberately narrower than RFC 5322 atext: '%', '!', '/', '|', '`' and friends are routing/escape hacks that some
+// systems interpret (a%40evil.com@x.com). Real mailboxes at Proton and the big providers never need them.
+const LOCAL_RE = /^[a-z0-9_+'=-]+(\.[a-z0-9_+'=-]+)*$/;
+const INVISIBLE_RE = new RegExp("[\\u00ad\\u061c\\u180e\\u200b-\\u200f\\u202a-\\u202e\\u2060-\\u2069\\ufeff]");
+const LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Canonical ASCII domain (punycode, lower case) or undefined when it is not a plausible host name. */
+export function canonicalDomain(raw: string): string | undefined {
+  // IDNA silently drops zero-width and direction characters; refuse them instead of "fixing" the input.
+  if (raw === "" || /[\s\u0000-\u001f]/.test(raw) || INVISIBLE_RE.test(raw)) return undefined;
+  const ascii = domainToASCII(raw.toLowerCase());
+  if (!ascii || ascii.length > 253) return undefined;
+  const labels = ascii.split(".");
+  if (labels.length < 2 || !labels.every((l) => LABEL_RE.test(l) || /^xn--[a-z0-9-]+$/.test(l))) return undefined;
+  if (/^\d+$/.test(labels[labels.length - 1] as string)) return undefined;
+  return ascii;
+}
+
 export function validateEmail(email: unknown): string {
   const e = asString(email, "email").trim();
   if (e.startsWith("-")) throw new Error(`email must not start with '-': ${e}`);
   if (CONTROL_RE.test(e)) throw new Error("email contains control characters");
-  if (!EMAIL_RE.test(e)) throw new Error(`invalid email address: ${e}`);
-  return e;
+  const at = e.indexOf("@");
+  const invalid = () => new Error(`invalid email address: ${e.length > 120 ? e.slice(0, 120) + "…" : e}`);
+  if (at < 1 || at !== e.lastIndexOf("@")) throw invalid();
+  const local = e.slice(0, at).toLowerCase();
+  const domain = canonicalDomain(e.slice(at + 1));
+  if (!domain || local.length > 64 || !LOCAL_RE.test(local)) throw invalid();
+  return `${local}@${domain}`;
 }
