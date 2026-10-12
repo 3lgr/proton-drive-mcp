@@ -2,8 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, DriveParseError } from "./errors.js";
 
-// An empty value counts as unset: some clients pass "" for an optional setting.
-const CLI_BINARY = process.env["PROTON_DRIVE_BIN"] || "proton-drive";
+import { trustedBinary } from "./binaryIntegrity.js";
 const DEFAULT_TIMEOUT_MS = 60_000;
 // Upload and download transfer actual file bytes — use a much longer timeout.
 const TRANSFER_TIMEOUT_MS = 30 * 60_000; // 30 minutes
@@ -81,7 +80,9 @@ type ExecError = NodeJS.ErrnoException & {
   cancelled?: boolean;
 };
 
-function execCli(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+async function execCli(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+  // S-01: absolute path, and (with PROTON_DRIVE_BIN_SHA256) verified immediately before the spawn.
+  const binary = await trustedBinary();
   return new Promise((resolve, reject) => {
     const signal = callContext.getStore()?.signal;
     if (signal?.aborted) {
@@ -101,7 +102,7 @@ function execCli(args: string[], timeoutMs: number): Promise<{ stdout: string; s
     let errBytes = 0;
 
     // stdin is ignored: the CLI must never sit waiting on an interactive prompt.
-    const child = spawn(CLI_BINARY, args, {
+    const child = spawn(binary, args, {
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -398,15 +399,18 @@ export async function runDriveRaw(args: string[]): Promise<string> {
 // Returns false only when the binary is not installed (ENOENT) or not executable (EACCES).
 // Any other error (non-zero exit, auth required, etc.) still returns true — the binary
 // is present and real errors will surface on the first actual tool call.
-export async function checkCliAvailable(): Promise<{ available: boolean; reason?: string }> {
+export async function checkCliAvailable(): Promise<{ available: boolean; reason?: string; detail?: string }> {
+  let binary: string;
+  try { binary = await trustedBinary(); }
+  catch (e) { return { available: false, reason: e instanceof DriveCliError ? "integrity" : "not_found", detail: e instanceof Error ? e.message : String(e) }; }
   return new Promise((resolve) => {
-    const child = spawn(CLI_BINARY, ["version"], {
+    const child = spawn(binary, ["version"], {
       detached: process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore"],
     });
     running.add(child);
     let done = false;
-    const finish = (r: { available: boolean; reason?: string }) => {
+    const finish = (r: { available: boolean; reason?: string; detail?: string }) => {
       if (done) return;
       done = true;
       clearTimeout(timer);

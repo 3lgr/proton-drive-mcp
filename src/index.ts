@@ -1694,7 +1694,7 @@ export async function main() {
   // up: tools/list works and each call returns a clear error.
   void checkCliAvailable().then((cliCheck) => {
     if (!cliCheck.available) {
-      logger.error(cliCheck.reason === "not_executable"
+      logger.error(cliCheck.reason === "integrity" ? `proton-drive CLI refused: ${cliCheck.detail ?? "integrity check failed"}` : cliCheck.reason === "not_executable"
         ? "proton-drive CLI found but not executable. Run: chmod +x $(which proton-drive)"
         : "proton-drive CLI not found. Download from https://proton.me/download/drive/cli/index.html, or set PROTON_DRIVE_BIN to its absolute path (find it with `which proton-drive`).");
     } else {
