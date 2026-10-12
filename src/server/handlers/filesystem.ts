@@ -11,21 +11,10 @@ import { freezeDownload, precheckDownload, safeDownload, describeDownload } from
 import { UPLOAD_FILE_STRATEGIES, UPLOAD_FOLDER_STRATEGIES, DOWNLOAD_FILE_STRATEGIES, DOWNLOAD_FOLDER_STRATEGIES, parseStrategy } from "../../policy/strategies.js";
 import type { Handler } from "../context.js";
 import { splitRemotePath } from "../../services/drive.js";
-import type { DriveService } from "../../services/drive.js";
-import type { SharePolicy } from "../../policy/sharePolicy.js";
-import { isRootPath } from "../../policy/remoteRoots.js";
+import { destinationShare, sharedDestinationNote, PRIVATE_DESTINATION } from "../../policy/sharedDestination.js";
 import { ok, fail, paginate, byTimeDescThenId } from "../result.js";
 import { bulkPrompt } from "../approvalText.js";
 import { PAGE_DEFAULTS } from "../catalog.js";
-
-/**
- * True when `folder` is already shared (members, invitations or a public link) and the share policy is strict.
- * Lookup failures count as "not known to be shared": the callers still validate paths and roots first.
- */
-async function folderIsShared(drive: DriveService, policy: SharePolicy, folder: string): Promise<boolean> {
-  if (policy.mode === "off" || isRootPath(folder)) return false;
-  try { return (await drive.shareStatus(folder)).isShared; } catch { return false; }
-}
 
 export const filesystemHandlers: Record<string, Handler> = {
   drive_auth_status: async (_a, { drive }) => {
@@ -52,12 +41,13 @@ export const filesystemHandlers: Record<string, Handler> = {
   drive_search: async (a, { drive }) => {
     return ok(await driveSearch(drive, a));
   },
-  drive_upload: async (a, { drive, gate }) => {
+  drive_upload: async (a, { drive, gate, sharePolicy }) => {
     const fcs = parseStrategy(a.fileConflictStrategy, UPLOAD_FILE_STRATEGIES, "fileConflictStrategy", "skip");
     const dcs2 = parseStrategy(a.folderConflictStrategy, UPLOAD_FOLDER_STRATEGIES, "folderConflictStrategy", "skip");
     const uploadLocal = validateLocalPath(a.localPath, { scan: true });
     const approvedUpload = precheckUpload(uploadLocal); // F-04: refuse secrets/links/special files before a human is asked
     const uploadRemote = validateRemotePath(a.remotePath);
+    const share = await destinationShare(drive, sharePolicy, uploadRemote); // N-01: upload is a copy into that folder
     // The CLI uploads a private, frozen snapshot of the validated tree, never the original path. The gate (when
     // it applies) approves the snapshot's own manifest; the snapshot is re-hashed after the answer.
     const uploadResult = await withUploadSnapshot(
@@ -65,10 +55,10 @@ export const filesystemHandlers: Record<string, Handler> = {
       ([snap]) => drive.upload(snap as string, uploadRemote, fcs, dcs2, a.skipThumbnails === true),
       {
         approved: [approvedUpload],
-        approve: (m) => gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 },
+        approve: (m) => gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2, sharedDestination: share.shared },
           `drive_upload needs your approval. It ${GATES.drive_upload!.consequence}\n` +
           `Sending ${m.files} file(s), ${m.bytes} bytes from ${approvalField(uploadLocal)} to ${approvalField(uploadRemote)} (content digest ${m.digest.slice(0, 16)})\n` +
-          `fileConflictStrategy: ${fcs}\nfolderConflictStrategy: ${dcs2}`),
+          `fileConflictStrategy: ${fcs}\nfolderConflictStrategy: ${dcs2}${sharedDestinationNote(share)}`),
       },
     );
     if (uploadResult.failed > 0) {
@@ -107,9 +97,9 @@ export const filesystemHandlers: Record<string, Handler> = {
     const moveSrc = validateRemotePath(a.sourcePath);
     const moveDst = validateRemotePath(a.destinationPath);
     const dstParent = splitRemotePath(moveDst).parent;
-    const shared = dstParent !== splitRemotePath(moveSrc).parent && (await folderIsShared(drive, sharePolicy, dstParent));
-    await gate("drive_move", { ...a, sharedDestination: shared },
-      `drive_move needs your approval. It ${GATES.drive_move!.consequence}\nsourcePath: ${approvalField(moveSrc)}\ndestinationPath: ${approvalField(moveDst)}`);
+    const share = dstParent !== splitRemotePath(moveSrc).parent ? await destinationShare(drive, sharePolicy, dstParent) : PRIVATE_DESTINATION;
+    await gate("drive_move", { ...a, sharedDestination: share.shared },
+      `drive_move needs your approval. It ${GATES.drive_move!.consequence}\nsourcePath: ${approvalField(moveSrc)}\ndestinationPath: ${approvalField(moveDst)}${sharedDestinationNote(share)}`);
     await drive.move(moveSrc, moveDst);
     return ok({ message: `Moved: ${moveSrc} → ${moveDst}` });
   },
@@ -143,8 +133,9 @@ export const filesystemHandlers: Record<string, Handler> = {
     const copySrc = validateRemotePath(a.sourcePath);
     const copyDst = validateRemotePath(a.destinationPath);
     const copyName = typeof a.newName === "string" ? validateName(a.newName) : undefined;
-    await gate("drive_copy", { ...a, sharedDestination: await folderIsShared(drive, sharePolicy, copyDst) },
-      `drive_copy needs your approval. It ${GATES.drive_copy!.consequence}\nsourcePath: ${approvalField(copySrc)}\ndestinationPath: ${approvalField(copyDst)}`);
+    const share = await destinationShare(drive, sharePolicy, copyDst);
+    await gate("drive_copy", { ...a, sharedDestination: share.shared },
+      `drive_copy needs your approval. It ${GATES.drive_copy!.consequence}\nsourcePath: ${approvalField(copySrc)}\ndestinationPath: ${approvalField(copyDst)}${sharedDestinationNote(share)}`);
     await drive.copy(copySrc, copyDst, copyName);
     return ok({ message: `Copied: ${copySrc} → ${copyDst}${copyName ? ` as '${copyName}'` : ""}` });
   },
@@ -168,7 +159,7 @@ export const filesystemHandlers: Record<string, Handler> = {
       return ok({ applied: false, ...movePlan, next: movePlan.problems.length ? "Fix problems first." : "Get user approval, then confirmed=true." });
     }
     if (movePlan.problems.length) return fail(`drive_bulk_move not applied, nothing moved: ${JSON.stringify(movePlan.problems)}`);
-    const sharedNote = (await folderIsShared(drive, sharePolicy, destFolder)) ? "\nWARNING: the destination folder is already shared with other people; they will see these items." : "";
+    const sharedNote = sharedDestinationNote(await destinationShare(drive, sharePolicy, destFolder));
     try { await gate("drive_bulk_move", a, bulkPrompt("drive_bulk_move", "Move", sources, destFolder) + sharedNote); }
     catch (e) { if (e instanceof NeedsConfirmationError) return fail(`drive_bulk_move not applied, nothing moved: ${e.message}`); throw e; }
     try { await drive.bulkMove(sources, destFolder); } finally { invalidatePath(destFolder); sources.forEach(invalidatePath); }

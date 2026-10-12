@@ -66,13 +66,14 @@ export const TOOL_POLICY: Readonly<Record<string, ToolPolicy>> = {
 
   // ---- reversible writes without a gate
   drive_mkdir: none("write"), drive_rename: none("write"), drive_trash: none("write"), drive_restore: none("write"),
-  photos_create_album: none("write"), photos_update_album: none("write"), photos_add_to_album: none("write"),
+  photos_create_album: none("write"), photos_update_album: none("write"),
   photos_upload: { class: "write", consent: "none", local: { listArgs: ["localPaths"] } },
 
   // ---- writes whose consent depends on state seen by the handler
   drive_upload: handler("write", (a) => GATES.drive_upload!.applies(a), { args: ["localPath"] }),
   drive_download: handler("write", (a) => GATES.drive_download!.applies(a), { args: ["localPath"] }),
   photos_download: handler("write", (a) => GATES.photos_download!.applies(a), { args: ["localFolder"] }),
+  photos_add_to_album: handler("write", () => true),
   drive_move: handler("write", () => true),
   drive_copy: handler("write", () => true),
   drive_write_file: handler("write", () => true, { syncRoot: true }),
