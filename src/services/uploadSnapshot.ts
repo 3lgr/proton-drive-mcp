@@ -2,16 +2,16 @@
 // window in which the tree changes (or the CLI sees something the scanner did not). So the tree is validated with
 // lstat (links never followed), copied file by file into a private 0700 snapshot, and the CLI uploads the snapshot.
 // planUploadSnapshot() is pure; the executor performs only what it returns. Any error refuses the call.
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, utimesSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, utimesSync } from "node:fs";
 import { createReadStream, createWriteStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { isProtectedEntry } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
+import { createOwnedTemp, removeTreeSafe, serverTempBase } from "../utils/privateTemp.js";
 
 export const MAX_UPLOAD_ENTRIES = 50_000;
 const MAX_DEPTH = 64;
@@ -196,17 +196,6 @@ function freeze(root: string): void {
   walk(root);
 }
 
-function thaw(root: string): void {
-  const walk = (p: string): void => {
-    let st;
-    try { st = lstatSync(p); } catch { return; }
-    if (!st.isDirectory()) return;
-    try { chmodSync(p, 0o700); } catch { /* removal below reports it */ }
-    for (const n of readdirSync(p)) walk(join(p, n));
-  };
-  walk(root);
-}
-
 export interface SnapshotOptions {
   /** Plans (manifests) returned by precheckUpload, one per path: the fresh scan must match them exactly. */
   approved?: readonly (readonly SnapshotAction[])[];
@@ -231,8 +220,9 @@ const sameAction = (a: SnapshotAction, b: SnapshotAction): boolean =>
 export async function withUploadSnapshot<T>(
   localPaths: readonly string[], fn: (snapshotPaths: string[]) => Promise<T>, opts: SnapshotOptions = {},
 ): Promise<T> {
-  const stage = mkdtempSync(join(tmpdir(), "pdmcp-upload-"));
-  registerTempDir(stage);
+  const owned = createOwnedTemp(serverTempBase(), "pdmcp-upload-");
+  const stage = owned.work;
+  registerTempDir(owned.root);
   try {
     const out: string[] = [];
     const verifiers: Array<() => Promise<ManifestFile[]>> = [];
@@ -271,6 +261,6 @@ export async function withUploadSnapshot<T>(
     }
     return await fn(out);
   } finally {
-    try { thaw(stage); rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
+    try { removeTreeSafe(owned.root); } catch { /* the startup sweep takes it if it is ours and orphaned */ } finally { unregisterTempDir(owned.root); }
   }
 }

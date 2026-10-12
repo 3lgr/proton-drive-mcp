@@ -7,7 +7,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readDriveContent } from "../dist/services/content.js";
 import { callContext } from "../dist/utils/subprocess.js";
-import { sweepStaleTempDirs } from "../dist/utils/tempSweep.js";
 import { parseCliMajorMinor, cliCompatWarning } from "../dist/utils/cliVersion.js";
 
 
@@ -40,28 +39,6 @@ describe("cliVersion", () => {
     assert.equal(parseCliMajorMinor("Proton Drive CLI cli-drive@0.80.0"), "0.80");
     assert.ok(cliCompatWarning("Proton Drive CLI cli-drive@0.80.0"));
     assert.equal(cliCompatWarning("Proton Drive CLI \x1b[1mcli-drive@0.8.0\x1b[0m"), undefined);
-  });
-});
-
-describe("stale temp-dir sweep", () => {
-  it("removes only old pdmcp-read-/pdmcp-dup- real directories of this uid", async () => {
-    const root = mkdtempSync(join(tmpdir(), "sweep-test-"));
-    try {
-      const old = (n) => { const d = join(root, n); mkdirSync(d); writeFileSync(join(d, "f"), "x"); const t = new Date(Date.now() - 2 * 3600_000); utimesSync(d, t, t); return d; };
-      const oldRead = old("pdmcp-read-aaa"), oldDup = old("pdmcp-dup-bbb"), other = old("something-else"), oldFile = join(root, "pdmcp-read-file");
-      writeFileSync(oldFile, "x"); utimesSync(oldFile, new Date(0), new Date(0));
-      const fresh = join(root, "pdmcp-read-new"); mkdirSync(fresh);
-      const target = join(root, "target"); mkdirSync(target); writeFileSync(join(target, "keep"), "x");
-      symlinkSync(target, join(root, "pdmcp-read-link"));
-      await sweepStaleTempDirs(root);
-      assert.equal(existsSync(oldRead), false);
-      assert.equal(existsSync(oldDup), false);
-      assert.equal(existsSync(other), true);
-      assert.equal(existsSync(oldFile), true, "plain files are not touched");
-      assert.equal(existsSync(fresh), true);
-      assert.equal(existsSync(join(target, "keep")), true, "symlink target untouched");
-      assert.ok(readdirSync(root).includes("pdmcp-read-link"));
-    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
 

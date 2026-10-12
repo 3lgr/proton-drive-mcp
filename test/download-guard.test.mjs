@@ -84,7 +84,7 @@ describe("drive_download / photos_download validate remote entries", () => {
     assert.deepEqual(downloads(calls), []);
   });
 
-  it("allows a normal folder: the CLI writes to a staging dir beside the destination, the result lands in the destination", async () => {
+  it("allows a normal folder: the CLI writes to a private staging dir (not beside the destination), the result lands in the destination", async () => {
     const dest = join(base, "d5", "nested");
     const { r, calls } = await run({
       __info__: { "/my-files/proj": folderNode },
@@ -93,12 +93,12 @@ describe("drive_download / photos_download validate remote entries", () => {
     }, "drive_download", { remotePath: "/my-files/proj", localPath: dest }, { FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "proj/a.txt" }, { rel: "proj/.gitignore" }, { rel: "proj/sub/b.txt" }]) });
     assert.equal(r.isError, false, r.text);
     const argv = downloads(calls)[0];
-    assert.equal(realpathSync(dirname(argv[3])), realpathSync(dirname(dest)), "staging is beside the destination");
-    assert.match(basename(argv[3]), /^\.pdmcp-stage-/);
+    assert.notEqual(realpathSync(dirname(dirname(argv[3]))), realpathSync(dirname(dest)), "staging is not beside the destination");
+    assert.match(basename(dirname(argv[3])), /^pdmcp-stage-/);
     assert.notEqual(argv[3], dest);
     assert.equal(statSync(dest).mode & 0o777, 0o700);
     assert.equal(existsSync(join(dest, "proj", "sub", "b.txt")), true);
-    assert.equal(existsSync(argv[3]), false, "staging removed");
+    assert.equal(existsSync(dirname(argv[3])), false, "staging removed");
   });
 
   it("single file: one info call, no tree walk", async () => {
@@ -107,7 +107,7 @@ describe("drive_download / photos_download validate remote entries", () => {
     assert.ok(!calls.some((a) => a[1] === "list"));
   });
 
-  const stageResidue = (dir) => readdirSync(dir).filter((n) => n.startsWith(".pdmcp-stage-"));
+  const stageResidue = (dir) => { try { return readdirSync(dir).filter((n) => /pdmcp-stage-/.test(n)); } catch { return []; } };
   const folderTree = (extra = {}) => ({
     __info__: { "/my-files/proj": folderNode },
     "/my-files/proj": [item("a.txt")],
@@ -116,12 +116,13 @@ describe("drive_download / photos_download validate remote entries", () => {
   async function stagedRefusal(label, writes, match, env = {}) {
     const root = mkdtempSync(join(base, "case-"));
     const dest = join(root, "dest");
+    const tmp = mkdtempSync(join(base, "tmp-")); // the server's private TMPDIR: its scratch base is <tmp>/pdmcp-private-<uid>
     const { r } = await run(folderTree(), "drive_download", { remotePath: "/my-files/proj", localPath: dest },
-      { FAKE_DOWNLOAD_WRITE: JSON.stringify(writes), ...env });
+      { FAKE_DOWNLOAD_WRITE: JSON.stringify(writes), TMPDIR: tmp, ...env });
     assert.equal(r.isError, true, `${label}: ${r.text}`);
     assert.match(r.text, match, label);
     assert.deepEqual(existsSync(dest) ? readdirSync(dest) : [], [], `${label}: nothing may reach the destination`);
-    assert.deepEqual(stageResidue(root), [], `${label}: staging removed`);
+    assert.deepEqual(stageResidue(join(tmp, `pdmcp-private-${process.getuid()}`)), [], `${label}: staging removed`);
   }
 
   it("a symlink created by the CLI refuses the whole download; nothing reaches the destination", () =>

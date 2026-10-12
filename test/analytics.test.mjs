@@ -175,11 +175,12 @@ describe("verifyGroups", () => {
   usePrivateTmp(beforeEach, afterEach);
   it("an aborted verify still removes the hasher's temp dir", async () => {
     const ac = new AbortController();
-    const before = readdirSync(tmpdir()).filter((x) => x.startsWith("pdmcp-dup-")).length;
+    const dups = () => { try { return readdirSync(join(tmpdir(), `pdmcp-private-${process.getuid()}`)).filter((x) => x.startsWith("pdmcp-dup-")).length; } catch { return 0; } };
+    const before = dups();
     const drive = { download: async (_p, dir) => { writeFileSync(join(dir, "f.bin"), "x"); ac.abort(new Error("cancelled")); return { downloaded: 1, failed: 0 }; } };
     const hash = makeDriveHasher(drive);
     await assert.rejects(verifyGroups([{ kind: "same-size", members: [f("/my-files/a", 1), f("/my-files/b", 1)] }], hash, { maxVerifyBytes: 1e6, concurrency: 1, signal: ac.signal }), /cancelled/);
-    assert.equal(readdirSync(tmpdir()).filter((x) => x.startsWith("pdmcp-dup-")).length, before);
+    assert.equal(dups(), before);
   });
 
   it("bounds concurrency", async () => {

@@ -183,7 +183,7 @@ export function describeRoots(): { mode: "configured" | "default" | "any"; roots
 
 /**
  * The one entry point every local file operation goes through (upload, download, photos, sync plan, read_file/
- * write_file roots): the real path of `absPath` must be inside an allowed root. Returns that real path.
+ * read_file root): the real path of `absPath` must be inside an allowed root. Returns that real path.
  */
 export function resolveAllowedLocal(absPath: string): string {
   const real = realResolve(resolve(absPath));
