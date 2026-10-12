@@ -2,7 +2,7 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DriveService } from "../services/drive.js";
 import { runDriveRaw } from "./subprocess.js";
-import { cliCompatWarning, TESTED_CLI } from "./cliVersion.js";
+import { cliCompatWarning, TESTED_CLI_LABEL } from "./cliVersion.js";
 import { binaryRisks, expectedSha256, trustedBinary, HASH_ENV, BIN_ENV } from "./binaryIntegrity.js";
 import { activeOptOuts } from "./envFlag.js";
 import { describeRoots, validateRoot, DEFAULT_ROOT_NAME, ANY_LOCAL_ENV } from "./localguard.js";
@@ -49,7 +49,7 @@ async function cliChecks(): Promise<{ checks: Check[]; cliPath?: string }> {
     const warning = cliCompatWarning(versionText);
     checks.push(warning
       ? { id: "cli-version", status: "warn", message: version, hint: warning }
-      : { id: "cli-version", status: "ok", message: `matches tested ${TESTED_CLI}.x` });
+      : { id: "cli-version", status: "ok", message: `matches tested ${TESTED_CLI_LABEL}` });
   }
 
   try {

@@ -61,7 +61,7 @@ test/                     Unit tests (injected runner) + real-process tests (fak
 
 ## CLI compatibility
 
-Tested against Proton Drive CLI 0.8.x (`TESTED_CLI = "0.8"` in `src/utils/cliVersion.ts`). `doctor` adds a `cli-version` check (warn, never fail, when the major.minor differs or cannot be parsed) and the server logs one stderr warning after `initialize` in the same cases.
+Tested against Proton Drive CLI 0.8.x and 0.9.x (`TESTED_CLI = ["0.8", "0.9"]` in `src/utils/cliVersion.ts`). `doctor` adds a `cli-version` check (warn, never fail, when the major.minor is not in that list or cannot be parsed) and the server logs one stderr warning after `initialize` in the same cases.
 
 ## Safety model
 

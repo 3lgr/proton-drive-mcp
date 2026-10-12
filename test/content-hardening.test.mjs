@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readDriveContent } from "../dist/services/content.js";
 import { callContext } from "../dist/utils/subprocess.js";
-import { parseCliMajorMinor, cliCompatWarning } from "../dist/utils/cliVersion.js";
+import { parseCliMajorMinor, cliCompatWarning, TESTED_CLI } from "../dist/utils/cliVersion.js";
 
 
 function fakeDrive({ node, name = "f", bytes }) {
@@ -39,6 +39,14 @@ describe("cliVersion", () => {
     assert.equal(parseCliMajorMinor("Proton Drive CLI cli-drive@0.80.0"), "0.80");
     assert.ok(cliCompatWarning("Proton Drive CLI cli-drive@0.80.0"));
     assert.equal(cliCompatWarning("Proton Drive CLI \x1b[1mcli-drive@0.8.0\x1b[0m"), undefined);
+  });
+  it("TESTED_CLI is a list: 0.8 and 0.9 pass, anything else warns naming the whole list", () => {
+    assert.deepEqual([...TESTED_CLI], ["0.8", "0.9"]);
+    assert.equal(cliCompatWarning("Proton Drive CLI cli-drive@0.9.0+abc"), undefined);
+    for (const v of ["0.7.9", "0.10.0", "1.0.0"]) {
+      assert.match(cliCompatWarning(`Proton Drive CLI cli-drive@${v}`), /Tested with 0\.8\.x, 0\.9\.x/);
+    }
+    assert.match(cliCompatWarning("garbage"), /Tested with 0\.8\.x, 0\.9\.x/);
   });
 });
 
