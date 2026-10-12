@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { DriveService } from "../services/drive.js";
 import { runDriveRaw } from "./subprocess.js";
 import { cliCompatWarning, TESTED_CLI } from "./cliVersion.js";
+import { binaryRisks, expectedSha256, trustedBinary, HASH_ENV, BIN_ENV } from "./binaryIntegrity.js";
 import { defaultConfigPath, isDirectory, isExecutableFile, resolveBinary, resolveDriveCli, SERVER_KEY } from "./claudeConfig.js";
 
 export interface Check {
@@ -57,7 +58,30 @@ async function cliChecks(): Promise<{ checks: Check[]; cliPath?: string }> {
   } catch (e) {
     checks.push({ id: "auth", status: "fail", message: `Authentication probe failed: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`, hint: "Run `proton-drive auth status` to investigate." });
   }
+  checks.push(...await integrityChecks(cliPath));
   return { checks, cliPath };
+}
+
+// S-01: where the binary comes from, who could replace it, and whether it is pinned.
+async function integrityChecks(cliPath: string): Promise<Check[]> {
+  const out: Check[] = [];
+  let pinned: string | undefined;
+  try { pinned = expectedSha256(); }
+  catch (e) { return [{ id: "cli-integrity", status: "fail", message: e instanceof Error ? e.message : String(e), hint: `Fix ${HASH_ENV}.` }]; }
+  if (pinned) {
+    try {
+      await trustedBinary();
+      out.push({ id: "cli-integrity", status: "ok", message: `sha256 matches ${HASH_ENV}` });
+    } catch (e) {
+      out.push({ id: "cli-integrity", status: "fail", message: e instanceof Error ? e.message : String(e), hint: "Reinstall the official CLI, or update the pinned hash if you upgraded it on purpose." });
+    }
+  } else {
+    out.push({ id: "cli-integrity", status: "warn", message: `the binary is not pinned (${cliPath})`, hint: `Set ${HASH_ENV} to its sha256 (shasum -a 256 <path>) so a replaced binary is refused.` });
+  }
+  for (const r of binaryRisks(cliPath)) {
+    out.push({ id: `cli-${r.id}`, status: "warn", message: r.message, hint: r.id === "from-path" ? `Set ${BIN_ENV} to an absolute path.` : "Restrict the permissions (chmod go-w) or reinstall it into a directory only you control." });
+  }
+  return out;
 }
 
 function syncPathCheck(): Check | undefined {

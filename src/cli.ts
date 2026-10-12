@@ -239,7 +239,7 @@ async function run() {
 
   const cliCheck = await checkCliAvailable();
   if (!cliCheck.available) {
-    const msg = cliCheck.reason === "not_executable"
+    const msg = cliCheck.reason === "integrity" ? `Error: ${cliCheck.detail ?? "binary integrity check failed"}` : cliCheck.reason === "not_executable"
       ? "Error: proton-drive CLI found but not executable.\nRun: chmod +x $(which proton-drive)"
       : "Error: proton-drive CLI not found in PATH.\nDownload from https://proton.me/download/drive/cli/index.html, or set PROTON_DRIVE_BIN to its absolute path (find it with `which proton-drive`).";
     console.error(msg);
