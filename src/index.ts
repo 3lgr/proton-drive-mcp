@@ -37,6 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
+import { loadSharePolicy, checkInvite, checkPublicLink } from "./policy/sharePolicy.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
 import { precheckUpload, withUploadSnapshot } from "./services/uploadSnapshot.js";
 import {
@@ -1174,6 +1175,7 @@ export async function main() {
   const tier = resolveTier(process.env.PROTON_DRIVE_TOOL_TIER); // read once at startup
   const activeDefs = tier === "core" ? TOOL_DEFS.filter((t) => CORE_TOOL_NAMES.has(t.name)) : TOOL_DEFS;
 
+  const sharePolicy = loadSharePolicy(); // read once at startup
   const canElicit = () => !!server.getClientCapabilities()?.elicitation?.form;
   // One approval policy for every gate (src/policy): the human is always asked when the client can ask;
   // otherwise strict tools fail closed unless the operator opted in. A looping model cannot spam the human.
@@ -1382,6 +1384,7 @@ export async function main() {
           }
           const inviteMsg = typeof a.message === "string" ? validateMessage(a.message) : undefined;
           const invitePath = validateRemotePath(a.path);
+          checkInvite(sharePolicy, email, role); // F-06
           await gate("drive_share_invite", a);
           await drive.shareInvite(invitePath, email, role as "viewer" | "editor" | "admin", inviteMsg);
           return ok({ message: `Invited ${email} as ${role}.` });
@@ -1494,6 +1497,7 @@ export async function main() {
           if (!["viewer", "editor"].includes(role)) return fail("role must be viewer or editor");
           const password = typeof a.password === "string" && a.password ? validateFlagValue(a.password, "password") : undefined;
           const expiration = typeof a.expiration === "string" && a.expiration ? validateFlagValue(a.expiration, "expiration") : undefined;
+          checkPublicLink(sharePolicy, { role, password, expiration }); // F-06
           await gate("drive_share_set_url", { ...a, password: password === undefined ? undefined : "[set]" });
           const link = await drive.shareSetUrl(setUrlPath, role as "viewer" | "editor", password, expiration);
           return ok(link);
