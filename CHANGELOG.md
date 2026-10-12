@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.0.2 - 2026-10-12
+
+Compatibility with the CLI 0.9 and Node 26, a pin helper for Claude Desktop, and test coverage. No tool, schema or gate
+changes.
+
+### Added
+- **CLI 0.9.x is a tested version.** `TESTED_CLI` is now a list (`["0.8", "0.9"]`); `doctor` and the startup log warn
+  only for other minors. Live-tested against CLI 0.9.0 / SDK 0.22.2: the read-only live suite (11 tests) and
+  list/create/trash in Claude Desktop. The mutating tools are still covered by the fake CLI only.
+- **`setup-claude-desktop --pin`** records the sha256 of the resolved CLI as `PROTON_DRIVE_BIN_SHA256` in the entry
+  (dry run shows the hash). Re-running without `--pin` keeps an existing pin and any extra env variables, and refuses
+  to continue (showing the pinned and the current hash) when the binary no longer matches the pin.
+- **`doctor` reads the pin from the Claude Desktop entry**, verifies it against the entry's binary, shows pinned vs
+  actual hash on a mismatch and warns when the entry has no pin.
+- **Stable `node` path.** `setup-claude-desktop` writes a `node` found on `PATH` whose realpath is the running binary
+  (e.g. `/opt/homebrew/bin/node`) instead of the versioned Cellar path that `brew upgrade node` breaks. Relative PATH
+  entries and locations writable by group or others are ignored; anything doubtful falls back to `process.execPath`.
+
+### CI
+- Node 26 added to the test matrix (22, 24, 26). `npm run test:coverage` exited 0 on Node 26.11.1 and 22.23.3 when
+  checked; the earlier `coverage file is empty` was not reproduced and coverage is not run in CI.
+
+### Tests
+- Line coverage of `src/utils/subprocess.ts` 54% to 96%, `src/server/handlers/analytics.ts` 39% to 100% and
+  `src/server/handlers/photos.ts` to 100% (timeouts, cancellation, process-tree cleanup, retry rules, buffer cap,
+  option pass-through, gates and transfer failures). The fake CLI gained a `flood` mode.
+
+### Docs
+- README and CONTRIBUTING: what to do when Proton updates the CLI (re-pin) and when Node changes; client table
+  (Claude Desktop Chat has no elicitation, so irreversible gates refuse; the Code tab is still to be verified).
+
 ## 2.0.1 - 2026-10-12
 
 Fixes from the independent post-release reviews. **One deliberate breaking change: `drive_write_file` is removed
