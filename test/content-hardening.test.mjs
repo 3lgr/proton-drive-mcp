@@ -70,7 +70,9 @@ async function terminated(child) {
 describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
   let fflate;
   before(async () => { fflate = await loadOptional("fflate"); });
-  const docx = (xml, extra = {}) => Buffer.from(fflate.zipSync({ "word/document.xml": new TextEncoder().encode(xml), ...extra }));
+  const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const rooted = (xml) => (/<w:document[^>]*xmlns:w/.test(xml) ? xml : `<w:document xmlns:w="${WML}"><w:body>${xml.replace(/<\/?w:document[^>]*>/g, "")}</w:body></w:document>`);
+  const docx = (xml, extra = {}) => Buffer.from(fflate.zipSync({ "word/document.xml": new TextEncoder().encode(rooted(xml)), ...extra }));
   const pdfNode = () => fileNode({ mediaType: "application/pdf" });
 
   it("a normal PDF and a normal docx still return text", async () => {
@@ -141,7 +143,7 @@ describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
 
   it("other entries are never inflated: 240 MB of unwanted entries cost neither time nor memory", async () => {
     const big = new Uint8Array(80 * 1024 * 1024);
-    const z = Buffer.from(fflate.zipSync({ "word/document.xml": [new TextEncoder().encode("<w:p><w:t>kept</w:t></w:p></w:document>"), { level: 1 }], a: [big, { level: 1 }], b: [big, { level: 1 }], c: [big, { level: 1 }] }));
+    const z = Buffer.from(fflate.zipSync({ "word/document.xml": [new TextEncoder().encode(rooted("<w:p><w:t>kept</w:t></w:p>")), { level: 1 }], a: [big, { level: 1 }], b: [big, { level: 1 }], c: [big, { level: 1 }] }));
     const rss0 = process.memoryUsage().rss;
     const t0 = Date.now();
     const r = await read(fakeDrive({ node: fileNode(), name: "total.docx", bytes: z }), "/total.docx");
@@ -181,14 +183,15 @@ describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
     assert.equal(r.truncated, true);
   });
 
-  it("docx: a declared size that differs from the extracted length adds a truncation note", async () => {
+  it("docx: declared sizes that lie are ignored; the real content is read and the result is complete", async () => {
     const buf = Buffer.from(docx("<w:p><w:t>x</w:t></w:p>".repeat(2000)));
     for (let i = 0; i < buf.length - 30; i++) { // lie in both headers: claim 100 bytes
       if (buf.readUInt32LE(i) === 0x02014b50) buf.writeUInt32LE(100, i + 24);
       if (buf.readUInt32LE(i) === 0x04034b50) buf.writeUInt32LE(100, i + 22);
     }
     const r = await read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: buf }), "/a.docx");
-    assert.match(r.note ?? "", /may be truncated/);
+    assert.equal(r.text.split("\n").filter((l) => l === "x").length, 2000);
+    assert.doesNotMatch(r.note ?? "", /truncated/);
   });
 });
 

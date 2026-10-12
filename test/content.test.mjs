@@ -123,7 +123,10 @@ describe("readDriveContent: pagination", () => {
 describe("readDriveContent: docx", needFflate, () => {
   let fflate;
   before(async () => { fflate = await loadOptional("fflate"); });
-  const docx = (entries) => Buffer.from(fflate.zipSync(Object.fromEntries(Object.entries(entries).map(([k, v]) => [k, typeof v === "string" ? new TextEncoder().encode(v) : v]))));
+  // A real package part carries the w:document root with the WordprocessingML namespace (extraction requires it).
+  const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const rooted = (v) => (typeof v === "string" && v.includes("<w:p") && !/<w:document[^>]*xmlns:w/.test(v) ? `<w:document xmlns:w="${WML}"><w:body>${v.replace(/<\/?w:document[^>]*>/g, "")}</w:body></w:document>` : v);
+  const docx = (entries) => Buffer.from(fflate.zipSync(Object.fromEntries(Object.entries(entries).map(([k, v]) => [k, typeof rooted(v) === "string" ? new TextEncoder().encode(rooted(v)) : rooted(v)]))));
   const XML = '<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:tab/><w:t xml:space="preserve"> Q&amp;A</w:t></w:r></w:p><w:p><w:r><w:t>Second</w:t><w:br/><w:t>line &#233;</w:t></w:r></w:p><w:p/><w:sectPr/></w:body></w:document>';
 
   it("extracts paragraphs, tabs, breaks and entities", async () => {
