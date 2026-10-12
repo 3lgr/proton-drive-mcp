@@ -67,7 +67,8 @@ describe("walk index store", () => {
     assert.equal(r2, "refused");
     assert.equal(statSync(indexDir()).mode & 0o777, 0o755);
     assert.deepEqual(readdirSync(indexDir()), []);
-    assert.equal(warns.filter((w) => w.includes(indexDir())).length, 1);
+    assert.equal(warns.filter((w) => w.includes("Persistent walk index not saved")).length, 1);
+    assert.ok(!warns.some((w) => w.includes(indexDir())), "paths are never logged");
   });
 
   it("accepts a pre-existing 0700 directory", () => {

@@ -1,17 +1,21 @@
+// Log lines are `message` (developer-authored, constant text) plus values. Values pass through safeValue():
+// numbers and booleans as they are, everything else as a length+hash marker or a class name. See safeOutput.ts.
+import { safeValue } from "./safeOutput.js";
 import { redact } from "./redact.js";
 
 const isMcp = () => process.env["PROTON_DRIVE_MCP"] === "1";
-const text = (args: unknown[]): string => redact(args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : String(a))).join(" "));
+const line = (message: string, values: unknown[]): string =>
+  redact([message, ...values.map(safeValue)].join(" ")); // redact(): second layer only
 
 export const logger = {
-  info: (...args: unknown[]) => {
-    if (!isMcp()) console.log("[INFO]", text(args));
-    else process.stderr.write(`[INFO] ${text(args)}\n`);
+  info: (message: string, ...values: unknown[]) => {
+    if (!isMcp()) console.log("[INFO]", line(message, values));
+    else process.stderr.write(`[INFO] ${line(message, values)}\n`);
   },
-  warn: (...args: unknown[]) => {
-    process.stderr.write(`[WARN] ${text(args)}\n`);
+  warn: (message: string, ...values: unknown[]) => {
+    process.stderr.write(`[WARN] ${line(message, values)}\n`);
   },
-  error: (...args: unknown[]) => {
-    process.stderr.write(`[ERROR] ${text(args)}\n`);
+  error: (message: string, ...values: unknown[]) => {
+    process.stderr.write(`[ERROR] ${line(message, values)}\n`);
   },
 };

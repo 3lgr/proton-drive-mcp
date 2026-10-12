@@ -4,6 +4,7 @@ import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, Drive
 
 import { trustedBinary } from "./binaryIntegrity.js";
 import { buildChildEnv } from "./childEnv.js";
+import { describeCliFailure } from "./safeOutput.js";
 import { redact } from "./redact.js";
 const DEFAULT_TIMEOUT_MS = 60_000;
 // Upload and download transfer actual file bytes — use a much longer timeout.
@@ -176,7 +177,7 @@ async function execCli(args: string[], timeoutMs: number): Promise<{ stdout: str
 // the MCP client, and buried the real cause. Build the message from the CLI's
 // own output instead. Confirmed live: some failures write the actual cause
 // ("ENOENT: no such file ...") to *stdout* and only a "=====" banner to stderr.
-function describeFailure(e: ExecError): string {
+function failureText(e: ExecError): string {
   const stderr = stripAnsi(e.stderr ?? "");
   const stdout = stripAnsi(e.stdout ?? "");
 
@@ -219,8 +220,7 @@ function describeFailure(e: ExecError): string {
     const code = typeof e.code === "number" ? ` (exit ${e.code})` : "";
     text = e.signal ? `CLI was terminated by ${e.signal}` : `CLI failed with no output${code}`;
   }
-  text = redact(text);
-  return text.length > MAX_ERROR_CHARS ? text.slice(0, MAX_ERROR_CHARS) + "…" : text;
+  return text.length > MAX_ERROR_CHARS ? text.slice(0, MAX_ERROR_CHARS) : text;
 }
 
 // Normalizes a raw exec failure into one of our typed errors. Shared by
@@ -246,7 +246,7 @@ function normalizeExecError(err: unknown, args: string[]): never {
 
   if (e.killed === true || e.code === "ETIMEDOUT") {
     const secs = timeoutFor(args) / 1000;
-    throw new DriveCliError(`CLI process timed out after ${secs}s`, "");
+    throw new DriveCliError(`CLI process timed out after ${secs}s [TIMEOUT]`, "");
   }
 
   if (e.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
@@ -257,7 +257,11 @@ function normalizeExecError(err: unknown, args: string[]): never {
     throw new DriveNotAuthenticatedError();
   }
 
-  throw new DriveCliError(describeFailure(e), "");
+  // The CLI's own words are classified, never repeated (see safeOutput.ts).
+  // (The human-run companion CLI, not the MCP server, still gets the CLI's own text for its terminal, redacted.)
+  const raw = failureText(e);
+  const forHuman = process.env["PROTON_DRIVE_MCP"] === "1" ? "" : redact(raw);
+  throw new DriveCliError(describeCliFailure(raw, typeof e.code === "number" ? e.code : undefined).message, forHuman);
 }
 
 // The CLI sometimes prints ANSI/progress noise before the JSON, so fall back to
