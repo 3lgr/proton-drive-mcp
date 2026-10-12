@@ -110,12 +110,12 @@ This fork is **not published on npm**. Install it from the repository, pinned to
 
 ```bash
 # global install from a tag (builds on install; read the tag's diff first)
-npm install -g github:3lgr/proton-drive-mcp#v2.0.0
+npm install -g github:3lgr/proton-drive-mcp#v2.0.1
 
 # or from a clone
 git clone https://github.com/3lgr/proton-drive-mcp.git
 cd proton-drive-mcp
-git checkout v2.0.0
+git checkout v2.0.1
 npm ci --ignore-scripts && npm run build
 node dist/index.js        # the MCP server
 ```
@@ -184,7 +184,7 @@ proton-drive-cli setup-claude-desktop [--config <path>] [--sync-path <dir>]
 proton-drive-cli setup-claude-desktop --sync-path "$HOME/Proton Drive" --write
 ```
 
-`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes the absolute path of the running `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.0`). The entry pins the current `node` binary, so re-run it after switching Node versions (e.g. with nvm). Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
+`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes the absolute path of the running `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.1`). The entry pins the current `node` binary, so re-run it after switching Node versions (e.g. with nvm). Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
 
 The default config location is per OS (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME` or `~/.config/Claude/`); use `--config` or the `CLAUDE_DESKTOP_CONFIG` environment variable to point elsewhere. On Windows the CLI lookup honours `PATHEXT`.
 
@@ -394,7 +394,7 @@ The server offers four MCP prompts (also declared in the MCPB manifest): `organi
 | `drive_version` | CLI and SDK version info | — |
 | `drive_list` | List files and folders at a path (paginated, default 200; `/` lists the roots) | `path`, `limit?`, `offset?` |
 | `drive_info` | Get metadata for one file/folder, including revision details (noise trimmed) | `path`, `verbose?` (raw CLI node) |
-| `drive_read_content` | Read the text of a file stored in Drive (no sync folder needed): text/code, `.docx`, text-layer `.pdf`. Paged; content is untrusted data. See [Reading file contents](#reading-file-contents) | `path`, `maxChars?` (default 20000, max 100000), `offset?` |
+| `drive_read_content` | Read the text of a file stored in Drive (no sync folder needed): UTF-8 plain text and code only; PDF, Office and other binaries are refused. Paged; content is untrusted data. See [Reading file contents](#reading-file-contents) | `path`, `maxChars?` (default 20000, max 100000), `offset?` |
 | `drive_tree` | Folder overview: per-folder file counts and size totals (largest first), depth-limited, cached 5 min | `path?`, `depth?` (default 2, max 10), `limit?`, `foldersOnly?`, `refresh?` |
 | `drive_search` | Find files/folders under a path in one cached walk: name (substring/glob; a glob containing `/` matches the path relative to `path`), type, extension, MIME prefix, size, modified date; sortable, paginated. Reports `walk.complete` — false means the walk was cut short and matches may be missing | `query?`, `glob?`, `path?`, `type?`, `mediaType?`, `extensions?`, `minSize?`, `maxSize?`, `modifiedAfter?`, `modifiedBefore?`, `sort?`, `limit?` (default 50, max 500), `offset?`, `refresh?` |
 | `drive_mkdir` | Create a new empty folder | `path` |

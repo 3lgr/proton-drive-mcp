@@ -54,4 +54,4 @@ What it does not do:
 - Windows is untested and unsupported.
 
 Operator guidance: run only MCP clients you trust, prefer a client with elicitation, set `PROTON_DRIVE_LOCAL_ROOT`,
-pin the CLI binary, keep `PROTON_DRIVE_SHARE_POLICY` strict, and leave document extraction off unless you need it.
+pin the CLI binary and keep `PROTON_DRIVE_SHARE_POLICY` strict.
