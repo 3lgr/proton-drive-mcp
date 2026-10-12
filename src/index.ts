@@ -1289,11 +1289,11 @@ export async function main() {
           const fcs = parseStrategy(a.fileConflictStrategy, UPLOAD_FILE_STRATEGIES, "fileConflictStrategy", "skip");
           const dcs2 = parseStrategy(a.folderConflictStrategy, UPLOAD_FOLDER_STRATEGIES, "folderConflictStrategy", "skip");
           const uploadLocal = validateLocalPath(a.localPath, { scan: true });
-          precheckUpload(uploadLocal); // F-04: refuse secrets/links/special files before a human is asked
+          const approvedUpload = precheckUpload(uploadLocal); // F-04: refuse secrets/links/special files before a human is asked
           const uploadRemote = validateRemotePath(a.remotePath);
           await gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 });
           // The CLI uploads a private snapshot of the validated tree, never the original path.
-          const uploadResult = await withUploadSnapshot([uploadLocal], ([snap]) => drive.upload(snap as string, uploadRemote, fcs, dcs2, a.skipThumbnails === true));
+          const uploadResult = await withUploadSnapshot([uploadLocal], ([snap]) => drive.upload(snap as string, uploadRemote, fcs, dcs2, a.skipThumbnails === true), { approved: [approvedUpload] });
           if (uploadResult.failed > 0) {
             return fail(`Upload completed with ${uploadResult.failed} failed file(s). uploaded=${uploadResult.uploaded} skipped=${uploadResult.skipped}`);
           }
@@ -1593,9 +1593,9 @@ export async function main() {
         case "photos_upload": {
           if (!Array.isArray(a.localPaths) || a.localPaths.length === 0) return fail("localPaths must be a non-empty array of strings");
           const uploadPaths = a.localPaths.map((p) => validateLocalPath(p, { scan: true }));
-          uploadPaths.forEach((p) => precheckUpload(p));
+          const approvedPhotos = uploadPaths.map((p) => precheckUpload(p));
           const pucs = parseStrategy(a.conflictStrategy, PHOTO_UPLOAD_STRATEGIES, "conflictStrategy", "skip");
-          const uploadSummary = await withUploadSnapshot(uploadPaths, (snaps) => drive.photoUpload(snaps, pucs));
+          const uploadSummary = await withUploadSnapshot(uploadPaths, (snaps) => drive.photoUpload(snaps, pucs), { approved: approvedPhotos });
           if (uploadSummary.failedItems > 0) {
             return fail(`Upload completed with ${uploadSummary.failedItems} failed item(s). transferred=${uploadSummary.transferredItems}`);
           }
