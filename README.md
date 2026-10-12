@@ -208,13 +208,31 @@ proton-drive-cli setup-claude-desktop [--config <path>] [--sync-path <dir>]
 
 # Apply it (timestamped backup first; only mcpServers["proton-drive-mcp"] is touched)
 proton-drive-cli setup-claude-desktop --sync-path "$HOME/Proton Drive" --write
+
+# Also pin the CLI: records the sha256 of the resolved binary as PROTON_DRIVE_BIN_SHA256 in the entry
+proton-drive-cli setup-claude-desktop --write --pin
 ```
 
-`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes the absolute path of the running `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.1`). The entry pins the current `node` binary, so re-run it after switching Node versions (e.g. with nvm). Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
+`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes an absolute path to `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.1`). The `node` it writes is the one running the command, but when a `node` on your `PATH` (e.g. `/opt/homebrew/bin/node`) is the same file it uses that stable path instead of the versioned one (`/opt/homebrew/Cellar/node/<version>/bin/node`), and only if that location is not writable by group or others; otherwise it falls back to the real path. Re-running keeps what is already in the entry (the pin and any extra variables such as `PROTON_DRIVE_LOCAL_ROOT`); `--pin` is the only thing that changes the pin, and without `--pin` a binary that no longer matches the stored pin is refused rather than trusted again. `--pin` trusts the binary that is on disk right now, so only use it on a CLI you installed from Proton. `doctor` reads the pin from the entry (the one the server started by Claude Desktop actually uses), compares it with the binary and warns when the entry has none. Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
 
 The default config location is per OS (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME` or `~/.config/Claude/`); use `--config` or the `CLAUDE_DESKTOP_CONFIG` environment variable to point elsewhere. On Windows the CLI lookup honours `PATHEXT`.
 
 **Claude Desktop only reads its config at startup: fully quit and restart it afterwards** (closing the window is not enough).
+
+### When Proton updates the CLI
+
+A pinned CLI (`PROTON_DRIVE_BIN_SHA256`) is refused after any change to the binary, including a legitimate upgrade. That is the pin working: the server will not run it and `doctor` reports `cli-integrity` as failed with the pinned and current hashes. After you have upgraded the CLI on purpose (and, ideally, checked the version with `proton-drive version`):
+
+```bash
+proton-drive-cli doctor                              # confirms the mismatch and the new version
+proton-drive-cli setup-claude-desktop --write --pin  # recomputes the sha256 and updates the entry (backup first)
+```
+
+Then fully quit and restart Claude Desktop. Without `--pin`, `setup-claude-desktop` stops with the old and new hash instead of re-trusting the new binary. If you pin by hand: `shasum -a 256 "$(which proton-drive)"`. A CLI minor version outside the tested list (0.8, 0.9) only produces a warning.
+
+### When Node changes
+
+The entry stores an absolute path to `node`. A path through your package manager's stable link (`/opt/homebrew/bin/node`) survives `brew upgrade node`; a versioned one (`.../Cellar/node/26.11.1/bin/node`) does not, and Claude Desktop then reports the server as failed to start. After switching Node versions (brew, nvm, fnm...) or if `doctor` says the entry's `command` does not resolve, re-run `proton-drive-cli setup-claude-desktop --write` (the pin and other variables stay). Node 22, 24 and 26 are covered by CI.
 
 ---
 
@@ -548,6 +566,14 @@ Limits that come from the upstream `proton-drive` CLI (v0.8.0), not from this se
 | macOS | Live-tested against a real account |
 | Linux | CI with a fake CLI only |
 | Windows | Not supported (see [Platform support](#platform-support)) |
+
+### Clients
+
+| Client | Elicitation (human asked for gated tools) | Status |
+|---|---|---|
+| Claude Code (CLI) | Yes | Prompts for every gated call |
+| Claude Desktop, Chat | No | Irreversible and outward-facing tools (empty trash, permanent delete, sharing, public links, logout, invitations, `remove`) are **refused**, by design |
+| Claude Desktop, Code tab | Not verified | To be checked; assume the same as Chat until confirmed |
 
 `proton-drive-cli doctor` warns when the installed CLI is not 0.8.x or 0.9.x, and the server logs one warning line to stderr at startup. Other versions may work but are unverified. If something breaks, open an issue at [github.com/3lgr/proton-drive-mcp/issues](https://github.com/3lgr/proton-drive-mcp/issues) with the output of `proton-drive version` and `proton-drive-cli doctor`.
 

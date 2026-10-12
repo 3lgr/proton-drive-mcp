@@ -14,9 +14,9 @@ npm run pack:check
 ```
 
 Node 22 or newer; CI runs 22, 24 and 26. `npm run test:coverage` is a local tool, CI does not run it. It exited 0
-on Node 22.23 and 26.11 when this was checked (2026-10-12). If you see `coverage file is empty` on a newer Node,
-first make sure no other `npm test` or build is running in the same checkout (the build wipes `dist/`, which the
-coverage run reads), then report it with the Node version. Tests use `test/helpers/fake-cli.mjs` as `PROTON_DRIVE_BIN`; `test/live.test.mjs` only runs with
+on Node 22.23 and 26.11 when this was checked (2026-10-12); an earlier `coverage file is empty` on Node 26 was not
+reproduced. One unconfirmed possibility is another `npm test` or build running in the same checkout (the build wipes
+`dist/`, which the coverage run reads). If it happens again, report it with the Node version. Tests use `test/helpers/fake-cli.mjs` as `PROTON_DRIVE_BIN`; `test/live.test.mjs` only runs with
 `PROTON_DRIVE_LIVE` and a real account, which you should not use for destructive tools.
 
 ## Rules
@@ -33,6 +33,20 @@ coverage run reads), then report it with the Node version. Tests use `test/helpe
 - Small, focused files (< 800 lines), functions under ~50 lines, immutable data where practical.
 - Conventional commits (`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `ci`). No secrets, no `.env`.
 - New environment variable: read it as `process.env["NAME"]` and add it to the README table (a test enforces this).
+
+## When Proton updates the CLI
+
+The tested versions are the list `TESTED_CLI` in `src/utils/cliVersion.ts`. To add one: run `test/live.test.mjs` against
+the new CLI with a throw-away account (`PROTON_DRIVE_LIVE`, read-only tests only), fix whatever differs, add the
+`major.minor` to the list, and update the README compatibility table, `SPEC.md` and the changelog. Users who pinned the
+binary re-pin with `proton-drive-cli setup-claude-desktop --write --pin` (README, "When Proton updates the CLI").
+Fake-CLI output in tests stays the shape confirmed live, not guessed.
+
+## When Node changes
+
+CI runs the supported majors (22, 24, 26). Adding or dropping one means the matrix in `.github/workflows/ci.yml`,
+`engines` in `package.json`, `doctor`'s Node check, the README and this file. Actions stay pinned by SHA. Tests that
+depend on which `node` path `setup-claude-desktop` writes set their own `PATH` (see `test/setup-node-path.test.mjs`).
 
 ## Releases and Trusted Publishing
 
