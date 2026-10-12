@@ -65,10 +65,22 @@ Tested against Proton Drive CLI 0.8.x (`TESTED_CLI = "0.8"` in `src/utils/cliVer
 
 ## Safety model
 
-- All argv built as arrays for `spawn` (no shell); flag injection blocked by validators.
-- `confirmed: true` required for destructive or outward-facing tools (delete, empty trash, remove-all, album delete, invite, revoke, public links, leave, reject, logout, remove-from-album) and for the `replace` / `remove` conflict strategies and overwriting a sync-folder file. The CLI requires `--confirm` for the destructive ones.
-- Local paths: credential-location denylist (or `PROTON_DRIVE_LOCAL_ROOT` allowlist), symlinks resolved first.
-- Errors never echo the command line; output is truncated.
+- All argv built as arrays for `spawn` (no shell); flag injection blocked by validators. The CLI runs by absolute path
+  with a minimal environment; `PROTON_DRIVE_BIN_SHA256` pins it (a verified private copy is what runs).
+- **Gates** (`src/policy/gates.ts`, one table). A gated call needs consent that the model cannot supply:
+  - client supports MCP elicitation: the human is always asked (the model's `confirmed` is irrelevant);
+  - otherwise, strict tools (irreversible or outward-facing) are refused unless `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE=1`,
+    and non-strict gated tools accept prompt-level `confirmed: true`;
+  - the companion CLI is typed by a human: the same table says which commands need `--confirm`.
+  `confirmed` is therefore a hint for non-eliciting clients, never proof of consent.
+- Local paths: credential denylist and secret-name denylist (also inside `PROTON_DRIVE_LOCAL_ROOT`), allowlist,
+  realpath-resolved and case-folded on macOS/Windows. Downloads: names validated, private staging, pure plan, no
+  overwrite. Uploads: frozen hashed snapshot bound to the approved manifest.
+- Remote paths: roots are never mutated; `drive_delete` accepts only trash items.
+- Sharing policy for links and invitations (`PROTON_DRIVE_SHARE_POLICY`).
+- Everything that carries text from Drive is returned in an untrusted envelope and sanitised; logs and errors use a
+  closed vocabulary (codes, markers), never CLI output.
+- Documents (`.docx`/`.pdf`) are opt-in (`PROTON_DRIVE_ENABLE_DOC_EXTRACT=1`) and parsed in a sandboxed process.
 - CLI children run in their own process group and are killed on timeout, cancellation, disconnect and SIGTERM/SIGINT.
 
 ## Testing strategy

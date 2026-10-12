@@ -59,9 +59,11 @@ export function hiddenProps(props: string): boolean {
 interface StyleInfo { hidden: Set<string>; defaultHidden: boolean }
 
 /** Which styles hide text: their own properties, basedOn chains, and docDefaults. */
-function parseStyles(xml: string | undefined): StyleInfo {
+function parseStyles(raw: string | undefined): StyleInfo {
   const info: StyleInfo = { hidden: new Set(), defaultHidden: false };
-  if (!xml) return info;
+  if (!raw) return info;
+  if (/<!DOCTYPE|<!ENTITY/i.test(raw)) throw new Error("refused: styles.xml declares a DOCTYPE or entities");
+  const xml = stripXmlNoise(normaliseTags(raw), { n: 0 });
   const dd = xml.indexOf("<w:docDefaults");
   if (dd !== -1) {
     const end = xml.indexOf("</w:docDefaults>", dd);
@@ -147,11 +149,70 @@ function paragraphText(p: string, st: StyleInfo, hidden: { n: number }): string 
   return line + pieces(tail);
 }
 
-function collectDocxText(xml: string, maxChars: number, styles: StyleInfo = { hidden: new Set(), defaultHidden: false }): { text: string; capped: boolean; hidden: number } {
+const WML_NS = new Set([
+  "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+  "http://purl.oclc.org/ooxml/wordprocessingml/main",
+]);
+const ATTR = /([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"<>]*)"|'([^"'<>]*)')/g;
+
+/**
+ * Puts every start tag in one canonical shape (attribute names=double-quoted values, no spaces around "="), so the
+ * property checks below see what an XML parser sees: single-quoted or spaced attributes can not slip past them.
+ * Walks the text with indexOf: linear.
+ */
+function normaliseTags(xml: string): string {
+  let out = "";
+  let pos = 0;
+  for (let i = xml.indexOf("<", pos); i !== -1; i = xml.indexOf("<", pos)) {
+    out += xml.slice(pos, i);
+    const c = xml[i + 1];
+    const j = xml.indexOf(">", i);
+    if (j === -1) { out += xml.slice(i); pos = xml.length; break; }
+    const tag = xml.slice(i, j + 1);
+    pos = j + 1;
+    if (c === "/" || c === "!" || c === "?" || tag.length < 4 || !tag.includes("=")) { out += tag; continue; }
+    out += tag.replace(ATTR, (_m, name: string, dq: string | undefined, sq: string | undefined) => `${name}="${dq ?? sq ?? ""}"`);
+  }
+  return out + xml.slice(pos);
+}
+
+/** Comments, processing instructions and CDATA are never document text: dropped, and counted when they held markup. */
+function stripXmlNoise(xml: string, hidden: { n: number }): string {
+  let out = xml;
+  for (const [open, close] of [["<!--", "-->"], ["<?", "?>"], ["<![CDATA[", "]]>"]] as const) {
+    let res = "";
+    let pos = 0;
+    for (let i = out.indexOf(open, pos); i !== -1; i = out.indexOf(open, pos)) {
+      const j = out.indexOf(close, i + open.length);
+      res += out.slice(pos, i);
+      if (j === -1) { pos = out.length; break; }
+      if (open !== "<?" && /<w:t[\s>]/.test(out.slice(i, j))) hidden.n++;
+      pos = j + close.length;
+    }
+    out = res + out.slice(pos);
+  }
+  return out;
+}
+
+/** `w:` must be the WordprocessingML namespace everywhere: a rebinding makes the reader and the extractor disagree. */
+function assertWordNamespace(xml: string): void {
+  let seen = false;
+  for (const m of xml.matchAll(/xmlns:w\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+    seen = true;
+    if (!WML_NS.has(m[1] ?? m[2] ?? "")) throw new Error("refused: the document rebinds the w: namespace (not a plain Word document)");
+  }
+  if (!seen) throw new Error("refused: the document does not declare the WordprocessingML namespace");
+}
+
+function collectDocxText(
+  xml: string, maxChars: number, styles: StyleInfo = { hidden: new Set(), defaultHidden: false }, strictDocument = false,
+): { text: string; capped: boolean; hidden: number } {
   if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error("refused: the document declares a DOCTYPE or entities (not a plain Word document)");
+  // A real package part has a w:document root declaring the namespace; bare fragments are accepted only by docxXmlToText.
+  if (strictDocument || /xmlns:w\s*=/.test(xml)) assertWordNamespace(xml);
   const hidden = { n: 0 };
-  // whole-segment drops first: when in doubt, the segment is not read
-  let body = xml;
+  // canonical tags first, then whole-segment drops: when in doubt, the segment is not read
+  let body = stripXmlNoise(normaliseTags(xml), hidden);
   for (const tag of ["mc:AlternateContent", "w:del", "w:moveFrom", "w:moveTo"]) {
     const r = dropSegments(body, tag);
     body = r.xml;
@@ -328,7 +389,7 @@ export async function extractDocx(bytes: Uint8Array, load: Loader, maxChars: num
   const xml = new TextDecoder("utf-8").decode(readEntry(bytes, doc, fflate, DOCX_MAX_UNCOMPRESSED));
   const stylesEntry = entries.find((e) => e.name === "word/styles.xml");
   const styles = parseStyles(stylesEntry ? new TextDecoder("utf-8").decode(readEntry(bytes, stylesEntry, fflate, DOCX_MAX_STYLES)) : undefined);
-  const { text, capped, hidden } = collectDocxText(xml, maxChars, styles);
+  const { text, capped, hidden } = collectDocxText(xml, maxChars, styles, true);
   // a missing root close tag means the XML was cut off (or is not a Word document)
   const cutOff = !/<\/w:document>\s*$/.test(xml.slice(-64));
   const notes = [
