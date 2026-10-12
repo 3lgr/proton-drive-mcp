@@ -1,4 +1,5 @@
-import { accessSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { accessSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,9 +115,15 @@ export function writeEntry(file: string, entry: McpEntry): string | undefined {
   }
   config["mcpServers"] = { ...(servers as Record<string, unknown> | undefined), [SERVER_KEY]: entry };
   // Write beside the target and rename, so a crash or a concurrent reader never sees a truncated config.
-  const tmp = `${target}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", { mode: exists ? statSync(target).mode & 0o777 : 0o600 });
-  renameSync(tmp, target);
+  // Unpredictable name + O_EXCL: a pre-planted file or symlink at a guessable path can not be written through.
+  const tmp = `${target}.tmp-${process.pid}-${randomBytes(8).toString("hex")}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", { mode: exists ? statSync(target).mode & 0o777 : 0o600, flag: "wx" });
+    renameSync(tmp, target);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* not created */ }
+    throw e;
+  }
 
   const written = (parseConfig(file)["mcpServers"] as Record<string, unknown>)[SERVER_KEY];
   if (JSON.stringify(written) !== JSON.stringify(entry)) throw new Error(`Verification failed: ${file} does not contain the expected entry.`);

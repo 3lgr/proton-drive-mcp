@@ -604,6 +604,7 @@ async function run() {
         print(await drive.photoTimeline(args.includes("--load-details")));
       } else if (sub === "download") {
         if (positionals.length < 2) { console.error("Usage: photo download <photo>... <local-folder> [--conflict X]"); process.exit(1); return; }
+        if (positionals.length - 1 > 200) { console.error("photo download takes at most 200 photos per call"); process.exit(1); return; }
         const localFolder = positionals[positionals.length - 1];
         const photoPaths = positionals.slice(0, -1).map((p) => requirePath(p, "photo download <photo>... <local-folder>"));
         let localFolderValidated: string;
@@ -617,6 +618,7 @@ async function run() {
         print(await safePhotoDownload(drive, freezePhotoDownload({ remotePaths: photoPaths, localPath: localFolderValidated, strategy: conflictRaw as (typeof PHOTO_DOWNLOAD_STRATEGIES)[number] })));
       } else if (sub === "upload") {
         if (positionals.length === 0) { console.error("Usage: photo upload <local>... [--conflict X]"); process.exit(1); return; }
+        if (positionals.length > 200) { console.error("photo upload takes at most 200 paths per call"); process.exit(1); return; }
         const localPaths: string[] = [];
         for (const p of positionals) {
           try { const v = validateLocalPath(p, { scan: true }); precheckUpload(v); localPaths.push(v); }

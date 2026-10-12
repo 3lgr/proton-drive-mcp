@@ -30,6 +30,7 @@ import { basename, dirname, join } from "node:path";
 
 const argv = process.argv.slice(2);
 const mode = process.env.FAKE_MODE ?? "json";
+if (process.env.FAKE_ENV_DUMP) writeFileSync(process.env.FAKE_ENV_DUMP, JSON.stringify(Object.keys(process.env)));
 const isVersion = argv[0] === "version";
 
 if (process.env.FAKE_ARGV_LOG) {
