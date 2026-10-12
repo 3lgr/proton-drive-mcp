@@ -1,18 +1,40 @@
-// F-02: a download writes names chosen by the REMOTE side. Validating only the destination folder let a
-// remote item named ".ssh" (or "../../x", via a literal '/' in a node name) land in a protected place.
-// Before any byte is written every name that will be created is checked against the local policy; after the
-// transfer the new entries are scanned again. The closed CLI is not asked to sanitise anything.
-import { lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync, existsSync } from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
+// F-02: a download writes names chosen by the REMOTE side, and the closed CLI sanitises nothing.
+// Design (fail closed throughout; any error refuses the call and removes the staging directory):
+//   1. precheck   - the remote item's own name and the exact local target go through the local path policy.
+//   2. enumerate  - a folder is listed in full; every descendant name must be one plain path component.
+//                   An incomplete listing refuses (no "best effort").
+//   3. stage      - the CLI downloads into a fresh 0700 directory BESIDE the destination (same filesystem),
+//                   never into the destination itself.
+//   4. validate   - the staged tree is walked with lstat (links are never followed): symlinks, hardlinked
+//                   files, FIFOs/sockets/devices, case/normalisation collisions, unsafe names, entry and byte
+//                   limits all refuse. Modes are normalised (no setuid/exec bits from the remote side).
+//   5. place      - the destination is resolved ONCE (realpath.native), the final targets are re-checked
+//                   against the local policy, and entries are moved with rename(2) (copy only on EXDEV).
+//                   A failure mid-move rolls back what this call placed.
+import {
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, extname, join, basename } from "node:path";
 import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
 import { assertLocalPathAllowed } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
+import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
+import type { DownloadResult, TransferSummary } from "../types/index.js";
+import type { DownloadFileStrategy, DownloadFolderStrategy, PhotoDownloadStrategy } from "../policy/strategies.js";
 
 const CONTROL_RE = new RegExp("[\\x00-\\x1f\\x7f\\u2028\\u2029]");
-/** Folders a pre-download validation walk may list. Past this the download is refused, never waved through. */
 const MAX_VALIDATION_LISTINGS = 2000;
-const MAX_SNAPSHOT_ENTRIES = 100_000;
+const MAX_ENTRIES = 100_000;
+const MAX_DEPTH = 64;
+const DEFAULT_MAX_BYTES = 50 * 1024 ** 3;
+
+/** PROTON_DRIVE_DOWNLOAD_MAX_BYTES: most bytes one download call may bring in (default 50 GiB). */
+export function downloadMaxBytes(): number {
+  const n = Number(process.env["PROTON_DRIVE_DOWNLOAD_MAX_BYTES"]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_BYTES;
+}
 
 export interface EntryNameOptions { top?: boolean }
 
@@ -39,35 +61,32 @@ function relativeNames(root: string, path: string): string[] {
   return out.map(unescapeName);
 }
 
-export interface DownloadPlan {
-  readonly destination: string;
-  /** Where the item will appear: <destination>/<name>. */
-  readonly target: string;
-  /** Entries that already existed under `target` (null: too many to snapshot, so no post-scan). */
-  readonly before: ReadonlySet<string> | null;
+// ---- frozen requests: the object that is validated, shown to the human and executed is one and the same ----
+
+export interface DownloadRequest {
+  readonly remotePath: string;
+  readonly localPath: string;
+  readonly fileStrategy: DownloadFileStrategy;
+  readonly folderStrategy: DownloadFolderStrategy;
+}
+export interface PhotoDownloadRequest {
+  readonly remotePaths: readonly string[];
+  readonly localPath: string;
+  readonly strategy: PhotoDownloadStrategy;
 }
 
-/** Relative paths of everything under `root`, without following links. */
-function snapshot(root: string): ReadonlySet<string> | null {
-  const seen = new Set<string>();
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop() as string;
-    let names: string[];
-    try { names = readdirSync(dir); } catch { continue; }
-    for (const n of names) {
-      const full = join(dir, n);
-      seen.add(relative(root, full));
-      if (seen.size > MAX_SNAPSHOT_ENTRIES) return null;
-      try { if (lstatSync(full).isDirectory()) stack.push(full); } catch { /* vanished */ }
-    }
-  }
-  return seen;
+export const freezeDownload = (r: DownloadRequest): Readonly<DownloadRequest> => Object.freeze({ ...r });
+export const freezePhotoDownload = (r: PhotoDownloadRequest): Readonly<PhotoDownloadRequest> =>
+  Object.freeze({ ...r, remotePaths: Object.freeze([...r.remotePaths]) });
+
+export function describeDownload(r: DownloadRequest): string {
+  return `remotePath: ${showValue(r.remotePath)}\nlocalPath: ${showValue(r.localPath)}\nfileConflictStrategy: ${r.fileStrategy}\nfolderConflictStrategy: ${r.folderStrategy}`;
+}
+export function describePhotoDownload(r: PhotoDownloadRequest): string {
+  return `photoPaths: ${r.remotePaths.slice(0, 5).map((p) => showValue(p)).join(" | ")}${r.remotePaths.length > 5 ? ` (+${r.remotePaths.length - 5} more)` : ""}\nlocalFolder: ${showValue(r.localPath)}\nconflictStrategy: ${r.strategy}`;
 }
 
-function ensurePrivateDir(dir: string): void {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-}
+// ---- 1. precheck (no CLI call) ----
 
 function assertNotLink(path: string): void {
   try {
@@ -77,7 +96,7 @@ function assertNotLink(path: string): void {
   }
 }
 
-/** The checks that need no CLI call: the item's own name and the exact local file it would become. */
+/** Name and final target of one remote item. Returns the target path. */
 export function precheckDownload(remotePath: string, localPath: string): string {
   const name = unescapeName(splitRemotePath(remotePath).name);
   assertSafeEntryName(name, { top: true });
@@ -87,84 +106,231 @@ export function precheckDownload(remotePath: string, localPath: string): string 
   return target;
 }
 
-/** Validates everything a folder/file download will write. Throws before the transfer starts. */
-export async function guardDownload(drive: DriveService, remotePath: string, localPath: string): Promise<DownloadPlan> {
-  const target = precheckDownload(remotePath, localPath);
-
-  const node = (await drive.info(remotePath)) as { type?: unknown } | null;
-  const type = node && !Array.isArray(node) ? node.type : undefined;
-  if (type !== "file") {
-    // Folder (or unknown): list every descendant now, so a name chosen by the remote side cannot surprise us later.
-    const walk = await walkTree(drive, remotePath, { exclude: [], refresh: true, noDisk: true, budgetMs: 0, maxCalls: MAX_VALIDATION_LISTINGS });
-    if (!walk.complete) {
-      throw new Error(
-        `the remote folder could not be fully listed (${walk.skipped.length} folder(s) skipped or over the ${MAX_VALIDATION_LISTINGS}-folder validation limit), ` +
-        "so its entries cannot be validated before download. Download its subfolders separately.",
-      );
-    }
-    for (const n of walk.nodes) for (const part of relativeNames(walk.root, n.path)) assertSafeEntryName(part);
-  }
-
-  ensurePrivateDir(localPath);
-  return { destination: localPath, target, before: existsSync(target) ? snapshot(target) : new Set() };
+export function precheckPhotoDownload(r: PhotoDownloadRequest): void {
+  for (const p of r.remotePaths) precheckDownload(p, r.localPath);
 }
 
-/** Scans what the download created. A symlink it left behind is removed; any other violation fails the call. */
-export function verifyDownloaded(plan: DownloadPlan): void {
-  if (plan.before === null || !existsSync(plan.target)) return;
-  const realDest = realpathSync(plan.destination);
-  const realTarget = realpathSync(plan.target);
-  const inside = relative(realDest, realTarget);
-  if (inside.startsWith("..") || isAbsolute(inside)) {
-    throw new Error(`the download resolved outside the destination folder: ${showValue(plan.target)}`);
+// ---- 2. enumerate ----
+
+async function enumerateRemote(drive: DriveService, remotePath: string): Promise<void> {
+  const node = (await drive.info(remotePath)) as { type?: unknown; activeRevision?: { claimedSize?: unknown } } | null;
+  const isFile = node !== null && !Array.isArray(node) && typeof node === "object" && node.type === "file";
+  if (isFile) {
+    const size = node.activeRevision?.claimedSize;
+    if (typeof size === "number" && size > downloadMaxBytes()) throw new Error(`refusing: the item is ${size} bytes, over PROTON_DRIVE_DOWNLOAD_MAX_BYTES (${downloadMaxBytes()})`);
+    return;
   }
-  const problems: string[] = [];
-  const removed: string[] = [];
-  const stack = [plan.target];
-  while (stack.length) {
-    const dir = stack.pop() as string;
-    let entries: string[];
-    try { entries = readdirSync(dir); } catch { continue; }
-    for (const n of entries) {
+  const walk = await walkTree(drive, remotePath, { exclude: [], refresh: true, noDisk: true, budgetMs: 0, maxCalls: MAX_VALIDATION_LISTINGS });
+  if (!walk.complete) {
+    throw new Error(
+      `the remote folder could not be fully listed (${walk.skipped.length} folder(s) skipped or over the ${MAX_VALIDATION_LISTINGS}-folder validation limit), ` +
+      "so its entries cannot be validated before download. Download its subfolders separately.",
+    );
+  }
+  let total = 0;
+  for (const n of walk.nodes) {
+    for (const part of relativeNames(walk.root, n.path)) assertSafeEntryName(part);
+    total += typeof n.size === "number" ? n.size : 0;
+  }
+  if (walk.nodes.length > MAX_ENTRIES) throw new Error(`refusing: the folder holds more than ${MAX_ENTRIES} entries; download subfolders separately`);
+  if (total > downloadMaxBytes()) throw new Error(`refusing: the folder is ${total} bytes, over PROTON_DRIVE_DOWNLOAD_MAX_BYTES (${downloadMaxBytes()})`);
+}
+
+// ---- 3. staging ----
+
+function ensurePrivateDir(dir: string): void {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+}
+
+/** A fresh 0700 directory beside `realDest` (same filesystem => atomic rename), else in the OS temp dir. */
+function makeStaging(realDest: string): string {
+  let dir: string;
+  try { dir = mkdtempSync(join(dirname(realDest), ".pdmcp-stage-")); }
+  catch { dir = mkdtempSync(join(tmpdir(), "pdmcp-stage-")); }
+  chmodSync(dir, 0o700);
+  registerTempDir(dir);
+  return dir;
+}
+
+// ---- 4. validate ----
+
+const foldKey = (n: string): string => n.normalize("NFC").toLowerCase();
+const umaskBits = (): number => { const m = process.umask(); return m; };
+
+/** Walks the staged tree without following links. Throws on the first violation. Returns the top-level names. */
+export function validateStaged(stageRoot: string): string[] {
+  const realRoot = realpathSync.native(stageRoot);
+  const mask = umaskBits();
+  let entries = 0;
+  let bytes = 0;
+  const max = downloadMaxBytes();
+
+  const walk = (dir: string, depth: number): void => {
+    if (depth > MAX_DEPTH) throw new Error("download refused: folder nesting is too deep");
+    const names = readdirSync(dir);
+    const seen = new Set<string>();
+    for (const n of names) {
+      assertSafeEntryName(n, { top: depth === 0 });
+      const key = foldKey(n);
+      if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(n)}`);
+      seen.add(key);
+      if (++entries > MAX_ENTRIES) throw new Error(`download refused: more than ${MAX_ENTRIES} entries`);
       const full = join(dir, n);
-      const rel = relative(plan.target, full);
-      let st;
-      try { st = lstatSync(full); } catch { continue; }
-      if (plan.before.has(rel)) {
-        if (st.isDirectory()) stack.push(full);
-        continue;
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) throw new Error(`download refused: it contains a symlink (${showValue(n)})`);
+      if (st.isDirectory()) {
+        chmodSync(full, 0o777 & ~mask & 0o755 | 0o700);
+        walk(full, depth + 1);
+      } else if (st.isFile()) {
+        if (st.nlink > 1) throw new Error(`download refused: ${showValue(n)} is a hardlink`);
+        bytes += st.size;
+        if (bytes > max) throw new Error(`download refused: more than PROTON_DRIVE_DOWNLOAD_MAX_BYTES (${max}) arrived`);
+        chmodSync(full, 0o666 & ~mask & 0o644 | 0o600);
+      } else {
+        throw new Error(`download refused: ${showValue(n)} is not a regular file or folder (FIFO, socket or device)`);
       }
-      if (st.isSymbolicLink()) {
-        try { unlinkSync(full); removed.push(rel); } catch { problems.push(`${rel} (symlink, could not be removed)`); }
-        continue;
-      }
-      try { assertSafeEntryName(n); } catch { problems.push(`${rel} (unsafe name)`); }
-      if (st.isDirectory()) stack.push(full);
     }
+  };
+  walk(realRoot, 0);
+  return readdirSync(realRoot);
+}
+
+// ---- 5. place ----
+
+interface Counters { placed: number; skipped: number }
+
+function uniqueName(dir: string, name: string): string {
+  const ext = extname(name);
+  const stem = ext && ext !== name ? name.slice(0, -ext.length) : name;
+  for (let i = 1; i < 10_000; i++) {
+    const candidate = `${stem} (${i})${ext === name ? "" : ext}`;
+    if (!existsSyncNoFollow(join(dir, candidate))) return candidate;
   }
-  if (removed.length || problems.length) {
-    const parts = [
-      removed.length ? `removed ${removed.length} symlink(s) the download created: ${removed.slice(0, 5).map((r) => showValue(r, 60, 20)).join(", ")}` : "",
-      problems.length ? `unsafe entries: ${problems.slice(0, 5).map((r) => showValue(r, 60, 20)).join(", ")}` : "",
-    ].filter(Boolean);
-    throw new Error(`download finished but violated the local policy (${parts.join("; ")}). Treat the downloaded folder as untrusted.`);
+  throw new Error("could not find a free name for the downloaded item");
+}
+
+function existsSyncNoFollow(p: string): boolean {
+  try { lstatSync(p); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return false; throw e; }
+}
+
+function moveEntry(src: string, dst: string): void {
+  try {
+    renameSync(src, dst);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+    try {
+      cpSync(src, dst, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, dereference: false });
+    } catch (err) {
+      rmSync(dst, { recursive: true, force: true });
+      throw err;
+    }
+    rmSync(src, { recursive: true, force: true });
   }
 }
 
-/** Photos are flat files: validate each name, then scan the folder for links the CLI added. */
-export function guardPhotoDownload(remotePaths: readonly string[], folder: string): { folder: string; before: ReadonlySet<string> | null } {
-  for (const p of remotePaths) {
-    const name = unescapeName(splitRemotePath(p).name);
-    assertSafeEntryName(name, { top: true });
-    const target = join(folder, name);
-    assertLocalPathAllowed(target);
-    assertNotLink(target);
-  }
-  const before = existsSync(folder) ? snapshot(folder) : new Set<string>();
-  ensurePrivateDir(folder);
-  return { folder, before };
+function countFiles(p: string): number {
+  const st = lstatSync(p);
+  if (!st.isDirectory()) return 1;
+  return readdirSync(p).reduce((n, c) => n + countFiles(join(p, c)), 0);
 }
 
-export function verifyPhotoDownload(g: { folder: string; before: ReadonlySet<string> | null }): void {
-  verifyDownloaded({ destination: g.folder, target: g.folder, before: g.before });
+function placeEntry(
+  src: string, dstDir: string, name: string, fileStrat: string, folderStrat: string, c: Counters, journal: string[],
+): void {
+  assertSafeEntryName(name);
+  const dst = join(dstDir, name);
+  const srcIsDir = lstatSync(src).isDirectory();
+  if (!existsSyncNoFollow(dst)) {
+    moveEntry(src, dst);
+    journal.push(dst);
+    c.placed++;
+    return;
+  }
+  const dstSt = lstatSync(dst);
+  if (dstSt.isSymbolicLink()) throw new Error(`refusing to write through a symlink at ${showValue(dst)}`);
+  const strat = srcIsDir && dstSt.isDirectory() ? folderStrat : fileStrat;
+  if (strat === "skip") { c.skipped += countFiles(src); return; }
+  if (strat === "rename") {
+    const alt = uniqueName(dstDir, name);
+    moveEntry(src, join(dstDir, alt));
+    journal.push(join(dstDir, alt));
+    c.placed++;
+    return;
+  }
+  if (strat === "merge") {
+    for (const child of readdirSync(src).sort()) placeEntry(join(src, child), dst, child, fileStrat, folderStrat, c, journal);
+    return;
+  }
+  if (strat === "remove") {
+    rmSync(dst, { recursive: true, force: true });
+    moveEntry(src, dst);
+    journal.push(dst);
+    c.placed++;
+    return;
+  }
+  throw new Error(`unknown conflict strategy ${showValue(strat)}`);
+}
+
+function placeAll(realStage: string, realDest: string, names: string[], fileStrat: string, folderStrat: string): Counters {
+  const c: Counters = { placed: 0, skipped: 0 };
+  const journal: string[] = [];
+  try {
+    for (const name of names) {
+      assertSafeEntryName(name, { top: true });
+      assertLocalPathAllowed(join(realDest, name)); // re-checked on the resolved destination, right before use
+      placeEntry(join(realStage, name), realDest, name, fileStrat, folderStrat, c, journal);
+    }
+  } catch (e) {
+    for (const p of journal.reverse()) {
+      try { rmSync(p, { recursive: true, force: true }); } catch { /* best effort rollback */ }
+    }
+    throw e;
+  }
+  return c;
+}
+
+async function staged<T>(
+  localPath: string, expectTop: string | null, fileStrat: string, folderStrat: string, transfer: (stageDir: string) => Promise<T>,
+): Promise<{ result: T; counters: Counters }> {
+  ensurePrivateDir(localPath);
+  const realDest = realpathSync.native(localPath);
+  const stage = makeStaging(realDest);
+  try {
+    const result = await transfer(stage);
+    const names = validateStaged(stage);
+    if (expectTop !== null && names.some((n) => n !== expectTop)) {
+      throw new Error(`download refused: unexpected entries arrived (${names.filter((n) => n !== expectTop).slice(0, 3).map((n) => showValue(n, 40, 10)).join(", ")})`);
+    }
+    const counters = placeAll(realpathSync.native(stage), realDest, names, fileStrat, folderStrat);
+    return { result, counters };
+  } finally {
+    try { rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
+  }
+}
+
+/** drive_download / CLI download: validated, staged, placed. The CLI never writes into the destination. */
+export async function safeDownload(drive: DriveService, req: Readonly<DownloadRequest>): Promise<DownloadResult> {
+  precheckDownload(req.remotePath, req.localPath);
+  await enumerateRemote(drive, req.remotePath);
+  const expected = unescapeName(splitRemotePath(req.remotePath).name);
+  const { result, counters } = await staged(req.localPath, expected, req.fileStrategy, req.folderStrategy, (stage) =>
+    drive.download(req.remotePath, stage, req.fileStrategy, req.folderStrategy));
+  return {
+    ...result,
+    localPath: req.localPath,
+    downloaded: Math.max(0, result.downloaded - counters.skipped),
+    skipped: result.skipped + counters.skipped,
+  };
+}
+
+/** photos_download / CLI photo download. Photos are single files, so there is nothing to enumerate remotely. */
+export async function safePhotoDownload(drive: DriveService, req: Readonly<PhotoDownloadRequest>): Promise<TransferSummary> {
+  precheckPhotoDownload(req);
+  const { result, counters } = await staged(req.localPath, null, req.strategy, "merge", (stage) =>
+    drive.photoDownload([...req.remotePaths], stage, req.strategy));
+  return {
+    ...result,
+    transferredItems: Math.max(0, result.transferredItems - counters.skipped),
+    skippedItems: result.skippedItems + counters.skipped,
+  };
 }

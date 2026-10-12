@@ -97,7 +97,10 @@ describe("confirmation flags", () => {
   it("photo download --conflict remove succeeds with --confirm and --confirm is not treated as a path", async () => {
     const r = await runCli(["photo", "download", "/photos/p1.jpg", join(TMP, "ph"), "--conflict", "remove", "--confirm"]);
     assert.equal(r.code, 0, r.stderr);
-    assert.deepEqual(r.calls[0], ["photo", "download", "/photos/p1.jpg", join(TMP, "ph"), "--conflict-strategy", "remove", "--json"]);
+    const argv = r.calls[0];
+    // F-02: the CLI writes to a staging directory beside the destination, never into the destination itself
+    assert.deepEqual([argv[0], argv[1], argv[2], ...argv.slice(4)], ["photo", "download", "/photos/p1.jpg", "--conflict-strategy", "remove", "--json"]);
+    assert.match(argv[3], /\.pdmcp-stage-/);
   });
 });
 
