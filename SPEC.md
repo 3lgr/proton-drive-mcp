@@ -27,7 +27,7 @@ CLI:     node dist/cli.js <command>
 ```
 src/index.ts              MCP server: TOOLS (schemas), tool-surface derivation (gates, pagination),
                           schema enforcement, dispatch, lifecycle (signals, cancellation)
-src/cli.ts                Companion CLI (mirrors 45 of 47 tools; drive_read_file/drive_write_file are MCP-only)
+src/cli.ts                Companion CLI (mirrors 45 of 46 tools; drive_read_file is MCP-only)
 src/services/content.ts   drive_read_content: guarded private-temp download, UTF-8 text only, paging
 src/services/drive.ts     DriveService: one method per operation, CLI argv building, response parsing
 src/utils/subprocess.ts   Runs the CLI: timeouts, process-group kill, cancellation, sanitized errors
@@ -39,7 +39,7 @@ src/types/index.ts        Shared response types
 test/                     Unit tests (injected runner) + real-process tests (fake CLI over stdio)
 ```
 
-## Tools (47)
+## Tools (46)
 
 - **Auth / meta:** `drive_auth_status`, `drive_auth_logout`, `drive_version`
 - **Filesystem:** `drive_list`, `drive_info`, `drive_read_content`, `drive_tree`, `drive_search`, `drive_mkdir`, `drive_upload`, `drive_download`, `drive_rename`, `drive_move`, `drive_copy`
@@ -49,7 +49,7 @@ test/                     Unit tests (injected runner) + real-process tests (fak
 - **Plan & bulk:** `drive_sync_plan` (plan only), `drive_bulk_move`, `drive_bulk_trash` (plan first, `confirmed` to apply)
 - **Analytics:** `drive_usage`, `drive_find_duplicates`, `drive_sharing_audit`
 - **Photos:** `photos_list_albums`, `photos_create_album`, `photos_update_album`, `photos_delete_album`, `photos_list_album_photos`, `photos_add_to_album`, `photos_remove_from_album`, `photos_list_timeline`, `photos_download`, `photos_upload`
-- **Local sync folder (needs `PROTON_DRIVE_SYNC_PATH`):** `drive_read_file`, `drive_write_file`
+- **Local sync folder (needs `PROTON_DRIVE_SYNC_PATH`):** `drive_read_file`
 
 ## Design rules learned from the live CLI
 

@@ -113,8 +113,8 @@ const CLI_COMMAND = {
   photos_download: "photo download",
   photos_upload: "photo upload",
 };
-// Operate on the local sync folder via env var, so intentionally MCP-only.
-const MCP_ONLY = new Set(["drive_read_file", "drive_write_file"]);
+// Operates on the local sync folder via env var, so intentionally MCP-only.
+const MCP_ONLY = new Set(["drive_read_file"]);
 
 describe("CLI reachability", () => {
   let usage;

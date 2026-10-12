@@ -81,5 +81,5 @@ export const NON_EXPOSING_TOOLS: ReadonlySet<string> = new Set([
   "drive_invitation_reject", "drive_share_leave", "drive_share_remove_url", "drive_share_remove_all", "photos_list_albums",
   "photos_create_album", "photos_update_album", "photos_delete_album", "photos_list_album_photos", "photos_add_to_album",
   "photos_remove_from_album", "photos_list_timeline", "photos_download", "photos_upload", "drive_read_content", "drive_read_file",
-  "drive_write_file", "drive_sync_plan", "drive_bulk_move", "drive_bulk_trash", "drive_usage", "drive_find_duplicates", "drive_sharing_audit",
+  "drive_sync_plan", "drive_bulk_move", "drive_bulk_trash", "drive_usage", "drive_find_duplicates", "drive_sharing_audit",
 ]);

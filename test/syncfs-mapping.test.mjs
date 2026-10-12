@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { resolveSyncPath, readSyncFile, writeSyncFile } from "../dist/utils/syncfs.js";
+import { resolveSyncPath, readSyncFile } from "../dist/utils/syncfs.js";
 
 describe("sync path mapping (/my-files -> sync root)", () => {
   let root;
@@ -36,11 +36,11 @@ describe("sync path mapping (/my-files -> sync root)", () => {
   it("still rejects traversal via /my-files/..", () => {
     assert.throws(() => resolveSyncPath(root, "/my-files/../x"), /outside sync root/);
   });
-  it("write+read via /my-files lands at root, not a my-files folder", async () => {
-    await writeSyncFile(root, "/my-files/d/a.txt", "hi");
-    assert.equal(await readFile(join(root, "d", "a.txt"), "utf8"), "hi");
-    await assert.rejects(stat(join(root, "my-files")), { code: "ENOENT" });
+  it("read via /my-files maps to the sync root, not a my-files folder", async () => {
+    await mkdir(join(root, "d"), { recursive: true });
+    await writeFile(join(root, "d", "a.txt"), "hi");
     assert.equal(await readSyncFile(root, "/my-files/d/a.txt"), "hi");
+    await assert.rejects(stat(join(root, "my-files")), { code: "ENOENT" });
   });
 });
 

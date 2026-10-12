@@ -76,7 +76,6 @@ export const TOOL_POLICY: Readonly<Record<string, ToolPolicy>> = {
   photos_add_to_album: handler("write", () => true),
   drive_move: handler("write", () => true),
   drive_copy: handler("write", () => true),
-  drive_write_file: handler("write", () => true, { syncRoot: true }),
   drive_bulk_move: handler("write", (a) => a.confirmed === true),
   drive_bulk_trash: handler("write", (a) => a.confirmed === true),
 

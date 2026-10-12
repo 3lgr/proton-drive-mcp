@@ -41,7 +41,7 @@ const TOOL_TITLES: Record<string, string> = {
   drive_share_remove_all: "Remove all sharing", photos_list_albums: "List photo albums", photos_create_album: "Create photo album",
   photos_update_album: "Update photo album", photos_delete_album: "Delete photo album", photos_list_album_photos: "List album photos",
   photos_add_to_album: "Add photos to album", photos_remove_from_album: "Remove photo from album", photos_list_timeline: "List photo timeline",
-  photos_download: "Download photo", photos_upload: "Upload photos", drive_read_file: "Read synced text file", drive_read_content: "Read file text", drive_write_file: "Write synced text file",
+  photos_download: "Download photo", photos_upload: "Upload photos", drive_read_file: "Read synced text file", drive_read_content: "Read file text",
 };
 // Hint for clients that cap tool-result size: these tools can legitimately return large payloads.
 export const LARGE_RESULT_TOOLS = new Set(["drive_list", "drive_read_file", "drive_read_content"]);

@@ -94,13 +94,6 @@ export const GATES: Readonly<Record<string, GateSpec>> = {
     describe: { when: "when conflictStrategy is 'remove' (it deletes the existing LOCAL file)" },
     consequence: "with conflictStrategy 'remove' deletes the existing LOCAL file before downloading.",
   },
-  drive_write_file: {
-    // The handler always evaluates the gate and reports whether the write would overwrite (`overwrite`) and
-    // whether the folder is shared (`sharedDestination`).
-    strict: false, applies: (a) => a.overwrite === true || a.sharedDestination === true, cliConfirm: false,
-    describe: { when: "when the file already exists (it would be overwritten) or its folder is shared" },
-    consequence: "writes into the sync folder: it overwrites an existing file, or the new file becomes visible to the people the folder is shared with.",
-  },
   // Moving or copying into a folder that is ALREADY shared exposes the item to its members. The handlers set
   // `sharedDestination` (never the model: the schema has no such argument) after looking the destination up.
   drive_move: {

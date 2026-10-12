@@ -1,5 +1,5 @@
 // N-01: is a destination visible to other people? One answer for every tool that puts data somewhere
-// (move, copy, bulk move, upload, write_file, add to album), so the rule cannot drift between them.
+// (move, copy, bulk move, upload, add to album), so the rule cannot drift between them.
 //
 //   - strict policy only: with PROTON_DRIVE_SHARE_POLICY=off nothing is looked up
 //   - the destination AND every ancestor up to (not including) the root are checked, because a folder inside a

@@ -1,11 +1,11 @@
 // N-01: the shared-destination gate fails closed, looks at the whole ancestor chain and covers every tool that
-// can put data into a folder, album or sync folder that other people can see.
+// can put data into a folder or album that other people can see.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSandbox, startServer, fakeEnv, DIST_INDEX, nonVersionCalls } from "./helpers/mcp-client.mjs";
@@ -100,7 +100,7 @@ describe("N-01 ancestors", () => {
   });
 });
 
-describe("N-01 upload, write_file and album gates", () => {
+describe("N-01 upload and album gates", () => {
   it("drive_upload into a shared folder asks the human, naming the destination; decline uploads nothing", async () => {
     await withElicit("decline", async (client, sb, prompts) => {
       const r = await client.callTool({ name: "drive_upload", arguments: { localPath: SRC, remotePath: "/my-files/pub/inbox" } });
@@ -138,24 +138,6 @@ describe("N-01 upload, write_file and album gates", () => {
       const yes = await c.call("drive_upload", { localPath: SRC, remotePath: "/my-files/pub/inbox", confirmed: true });
       assert.equal(yes.isError, false, yes.text);
     } finally { await c.close(); sb.cleanup(); }
-  });
-
-  it("drive_write_file creating a NEW file in a shared folder asks the human; decline writes nothing", async () => {
-    const sync = mkdtempSync(join(tmpdir(), "sd-sync-"));
-    try {
-      await withElicit("decline", async (client, _sb, prompts) => {
-        const r = await client.callTool({ name: "drive_write_file", arguments: { path: "/my-files/pub/new.txt", content: "hi" } });
-        assert.equal(r.isError, true);
-        assert.match(prompts[0], /already shared with other people/);
-        assert.equal(existsSync(join(sync, "pub", "new.txt")), false);
-      }, { ...strict, PROTON_DRIVE_SYNC_PATH: sync, FAKE_SHARE_MAP: map({ "/my-files/pub": MEMBERS }) });
-      await withElicit("decline", async (client, _sb, prompts) => {
-        const r = await client.callTool({ name: "drive_write_file", arguments: { path: "/my-files/priv/new.txt", content: "hi" } });
-        assert.notEqual(r.isError, true);
-        assert.equal(prompts.length, 0);
-        assert.equal(existsSync(join(sync, "priv", "new.txt")), true);
-      }, { ...strict, PROTON_DRIVE_SYNC_PATH: sync });
-    } finally { rmSync(sync, { recursive: true, force: true }); }
   });
 
   const SHARED_ALBUM = JSON.stringify([{ uid: "al1", name: { ok: true, value: "Fam" }, isShared: true, album: { photoCount: 1 } }]);

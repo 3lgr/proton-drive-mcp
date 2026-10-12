@@ -151,7 +151,7 @@ describe("tools enforce the allowlist before the CLI", () => {
       assert.deepEqual(nonVersionCalls(sb.argvLog), []);
     } finally { await c.close(); sb.cleanup(); }
   });
-  it("a sync folder that is the home folder is refused for read_file/write_file", async () => {
+  it("a sync folder that is the home folder is refused for read_file", async () => {
     const sb = makeSandbox();
     const c = await startServer("json", sb, { PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH: "", PROTON_DRIVE_SYNC_PATH: fakeHome, HOME: fakeHome });
     try {

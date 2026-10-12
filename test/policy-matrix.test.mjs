@@ -20,7 +20,7 @@ const toolNames = TOOL_DEFS.map((t) => t.name);
 
 describe("registry completeness (default deny)", () => {
   it("every tool has exactly one handler and one policy, and vice versa", () => {
-    assert.equal(toolNames.length, 47);
+    assert.equal(toolNames.length, 46);
     assertRegistryComplete(toolNames, Object.keys(HANDLERS));
   });
   it("a tool without a policy, a handler or a gate entry makes startup fail", () => {
@@ -61,7 +61,7 @@ describe("the matrix: tool x (gate, allowlist, envelope)", () => {
         const declared = [...(p.local?.args ?? []), ...(p.local?.listArgs ?? [])];
         for (const k of localProps) assert.ok(declared.includes(k), `${def.name} takes ${k} but does not declare it as local`);
       }
-      if (def.name === "drive_read_file" || def.name === "drive_write_file") assert.equal(p.local?.syncRoot, true);
+      if (def.name === "drive_read_file") assert.equal(p.local?.syncRoot, true);
       // envelope: tools that return text written by others are in the untrusted table
       if (TEXT_FROM_DRIVE.includes(def.name)) assert.ok(Object.hasOwn(UNTRUSTED_TOOLS, def.name), "envelope");
       else assert.ok(!Object.hasOwn(UNTRUSTED_TOOLS, def.name), "only Drive-text tools are enveloped");

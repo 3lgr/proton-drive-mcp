@@ -1,10 +1,10 @@
-import { open, mkdir, realpath, lstat, stat } from "node:fs/promises";
+// fs/promises.realpath has the semantics of fs.realpath.native (the OS canonicalises case and symlinks).
+import { open, realpath, lstat } from "node:fs/promises";
 import { constants as fsc } from "node:fs";
 import { join, resolve, dirname, basename, relative, isAbsolute, sep } from "node:path";
-import { assertSyncReadable, assertSyncWritable, relUnder } from "./syncGuard.js";
+import { assertSyncReadable, relUnder } from "./syncGuard.js";
 
 const READ_LIMIT = 1 * 1024 * 1024; // 1 MB — prevent context overflow
-const WRITE_LIMIT = 5 * 1024 * 1024; // 5 MB — cap content written via MCP
 const NOFOLLOW = fsc.O_NOFOLLOW ?? 0; // 0 on platforms without it (Windows)
 
 export function getSyncRoot(): string | null {
@@ -92,18 +92,6 @@ async function containedReal(
   return { realRoot, real };
 }
 
-export async function syncFileExists(syncRoot: string, remotePath: string): Promise<boolean> {
-  const { real } = await containedReal(syncRoot, remotePath);
-  try {
-    await stat(real);
-    return true;
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return false;
-    throw e;
-  }
-}
-
 export async function readSyncFile(syncRoot: string, remotePath: string): Promise<string> {
   const { realRoot, real } = await containedReal(syncRoot, remotePath);
   // N-02: judged by the lexical spelling AND by where it really points (an in-root symlink must not hide a secret)
@@ -143,61 +131,6 @@ export async function readSyncFile(syncRoot: string, remotePath: string): Promis
     } catch {
       throw new Error(`${remotePath} is not valid UTF-8 text. Use drive_download instead.`);
     }
-  } finally {
-    await fh.close();
-  }
-}
-
-/** Lexical refusal, no file system access: lets the handler refuse before a human is asked about a forbidden target. */
-export function precheckSyncWrite(syncRoot: string, remotePath: string): void {
-  assertSyncWritable([relUnder(resolve(syncRoot), resolveSyncPath(syncRoot, remotePath))]);
-}
-
-export async function writeSyncFile(
-  syncRoot: string,
-  remotePath: string,
-  content: string
-): Promise<void> {
-  const bytes = Buffer.byteLength(content, "utf8");
-  if (bytes > WRITE_LIMIT) {
-    throw new Error(
-      `content is ${bytes} bytes — too large to write (limit 5 MB). Use drive_upload instead.`
-    );
-  }
-  const full = resolveSyncPath(syncRoot, remotePath);
-  const realRoot = await realRootOf(syncRoot, remotePath);
-  const name = basename(full);
-  const parent = dirname(full);
-  // N-02, before anything is created: lexical spelling, then the resolved location of the parent plus the name
-  const realTarget = join(await realResolve(parent, remotePath), name);
-  assertSyncWritable([relUnder(resolve(syncRoot), full), relUnder(realRoot, realTarget)], [realTarget]);
-
-  // Check before creating anything so mkdir cannot create directories outside the root.
-  assertInside(realRoot, await realResolve(parent, remotePath), remotePath);
-  await mkdir(parent, { recursive: true });
-  const realParent = await realpath(parent);
-  assertInside(realRoot, realParent, remotePath);
-
-  const target = join(realParent, name);
-  try {
-    if ((await lstat(target)).isSymbolicLink()) {
-      throw new Error(`refusing to write through a symlink: ${remotePath}`);
-    }
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-  }
-
-  const fh = await open(
-    target,
-    fsc.O_WRONLY | fsc.O_CREAT | fsc.O_TRUNC | NOFOLLOW,
-    0o644
-  );
-  try {
-    if (!(await fh.stat()).isFile()) {
-      throw new Error(`${remotePath} is not a regular file.`);
-    }
-    await fh.chmod(0o644); // N-02: data only, never an executable bit (an overwrite keeps the old mode otherwise)
-    await fh.writeFile(content, "utf8");
   } finally {
     await fh.close();
   }
