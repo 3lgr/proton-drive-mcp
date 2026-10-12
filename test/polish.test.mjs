@@ -209,11 +209,11 @@ describe("elicitation for gated tools", () => {
   });
 
   for (const [label, reply] of [["decline", { action: "decline" }], ["cancel", { action: "cancel" }], ["accept without approve", { action: "accept", content: { approve: false } }]]) {
-    it(`${label} keeps the refusal and runs nothing`, async () => {
+    it(`${label} refuses and runs nothing`, async () => {
       await withClient({ elicitation: { form: {} } }, async () => reply, async (client, sb) => {
         const r = await client.callTool({ name: "drive_delete", arguments: { path: "/trash/a.txt", confirmed: false } });
         assert.equal(r.isError, true);
-        assert.match(text(r), /confirmed=true/);
+        assert.match(text(r), /did not approve/);
         assert.deepEqual(nonVersionCalls(sb.argvLog), []);
       });
     });
@@ -230,7 +230,7 @@ describe("elicitation for gated tools", () => {
     await withClient({ elicitation: { form: {} } }, async () => ({ action: "decline" }), async (client, sb) => {
       const r = await client.callTool({ name: "drive_empty_trash", arguments: {} });
       assert.equal(r.isError, true);
-      assert.match(text(r), /confirmed=true/);
+      assert.match(text(r), /did not approve/);
       assert.deepEqual(nonVersionCalls(sb.argvLog), []);
     });
     await withClient({}, null, async (client, sb) => {
@@ -245,7 +245,7 @@ describe("elicitation for gated tools", () => {
     await withClient({ elicitation: { form: {} } }, async () => { throw new Error("boom"); }, async (client, sb) => {
       const r = await client.callTool({ name: "drive_empty_trash", arguments: { confirmed: false } });
       assert.equal(r.isError, true);
-      assert.match(text(r), /confirmed=true/);
+      assert.match(text(r), /did not approve/);
       assert.deepEqual(nonVersionCalls(sb.argvLog), []);
     });
   });
@@ -358,7 +358,7 @@ describe("elicitation for gated tools", () => {
       for (let i = 0; i < 8; i++) {
         const r = await client.callTool({ name: "drive_delete", arguments: { path: "/trash/a.txt", confirmed: false } });
         assert.equal(r.isError, true);
-        assert.match(text(r), /confirmed=true/);
+        assert.match(text(r), i < 5 ? /did not approve/ : /too many declined/);
       }
       assert.equal(asked, 5);
       assert.deepEqual(nonVersionCalls(sb.argvLog), []);
