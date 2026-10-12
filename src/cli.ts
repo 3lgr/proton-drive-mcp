@@ -12,8 +12,8 @@ import { DriveService } from "./services/drive.js";
 import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, DriveParseError } from "./utils/errors.js";
 import { checkCliAvailable } from "./utils/subprocess.js";
 import { runDoctor, formatDoctor } from "./utils/doctor.js";
-import { buildEntry, defaultConfigPath, isDirectory, resolveDriveCli, writeEntry, SERVER_KEY } from "./utils/claudeConfig.js";
-import { sha256File } from "./utils/binaryIntegrity.js";
+import { buildEntry, defaultConfigPath, isDirectory, readEntryEnv, resolveDriveCli, writeEntry, SERVER_KEY } from "./utils/claudeConfig.js";
+import { parseSha256, sha256File } from "./utils/binaryIntegrity.js";
 import { syncPlan, planBulkMove, planBulkTrash, loadListing, foldersToList, type Direction, type Compare } from "./services/plan.js";
 import { invalidatePath } from "./services/walk.js";
 import { indexStatus, deleteIndex } from "./services/walkIndex.js";
@@ -179,6 +179,25 @@ function print(data: unknown) {
   console.log(jsonMode ? JSON.stringify(data) : JSON.stringify(data, null, 2));
 }
 
+/** Without --pin, an existing pin is kept; if the binary no longer matches it, stop instead of silently re-trusting. */
+async function refuseUnpinnedChange(cliPath: string, preserved: Record<string, string>, repin: boolean): Promise<void> {
+  const raw = preserved["PROTON_DRIVE_BIN_SHA256"];
+  if (repin || raw === undefined || raw.trim() === "") return;
+  let want: string | undefined;
+  try { want = parseSha256(raw); } catch { /* reported below */ }
+  if (want === undefined) {
+    console.error("Error: the existing entry has a PROTON_DRIVE_BIN_SHA256 that is not 64 hexadecimal characters. Nothing changed; re-run with --pin to replace it with the hash of the current binary.");
+    process.exit(1);
+  }
+  let got: string;
+  try { got = await sha256File(cliPath); }
+  catch { console.error(`Error: could not read ${cliPath} to compare it with the pin in the entry.`); process.exit(1); }
+  if (got !== want) {
+    console.error(`Error: ${cliPath} does not match the pin in the existing entry.\n  pinned:  ${want}\n  current: ${got}\nNothing changed. If you upgraded the CLI on purpose, re-run with --pin to trust this binary; otherwise reinstall the official CLI.`);
+    process.exit(1);
+  }
+}
+
 async function setupClaudeDesktop() {
   const configPath = resolve(getFlag("--config") ?? defaultConfigPath());
   const rawSync = getFlag("--sync-path");
@@ -197,7 +216,9 @@ async function setupClaudeDesktop() {
     try { pin = await sha256File(cliPath); }
     catch { console.error(`Error: could not read ${cliPath} to compute its sha256.`); process.exit(1); }
   }
-  const entry = buildEntry(cliPath, syncPath, pin);
+  const preserved = readEntryEnv(configPath) ?? {};
+  await refuseUnpinnedChange(cliPath, preserved, pin !== undefined);
+  const entry = buildEntry(cliPath, syncPath, pin, preserved);
   const shown = JSON.stringify({ mcpServers: { [SERVER_KEY]: entry } }, null, 2);
   const pinNote = pin ? `Pinned: PROTON_DRIVE_BIN_SHA256 is the sha256 of ${cliPath} as it is now; only pin a binary you got from Proton.\n` : "";
   if (!args.includes("--write")) {

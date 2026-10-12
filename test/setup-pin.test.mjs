@@ -78,6 +78,64 @@ describe("setup-claude-desktop --pin", () => {
   });
 });
 
+describe("setup-claude-desktop never downgrades an existing entry", () => {
+  const seed = (bin, env) => {
+    const f = join(tmp(), "c.json");
+    writeFileSync(f, JSON.stringify({ theme: "dark", mcpServers: { "proton-drive-mcp": { command: "/old/node", args: ["/old/index.js"], env: { PROTON_DRIVE_BIN: bin, ...env } } } }, null, 2));
+    return f;
+  };
+  const EXTRAS = { PROTON_DRIVE_LOCAL_ROOT: "/Users/x/ProtonDriveMCP", PROTON_DRIVE_SHARE_POLICY: "strict" };
+
+  it("--write without --pin keeps the existing pin and every extra env variable (binary unchanged)", async () => {
+    const bin = fakeBinary("keep");
+    const f = seed(bin, { PROTON_DRIVE_BIN_SHA256: sha(bin), ...EXTRAS });
+    const r = await run(["setup-claude-desktop", "--config", f, "--write"], { PROTON_DRIVE_BIN: bin });
+    assert.equal(r.code, 0, r.stderr);
+    const e = entryOf(f);
+    assert.equal(e.env.PROTON_DRIVE_BIN_SHA256, sha(bin));
+    assert.equal(e.env.PROTON_DRIVE_LOCAL_ROOT, EXTRAS.PROTON_DRIVE_LOCAL_ROOT);
+    assert.equal(e.env.PROTON_DRIVE_SHARE_POLICY, "strict");
+    assert.equal(e.env.PROTON_DRIVE_BIN, bin);
+    assert.equal(JSON.parse(readFileSync(f, "utf8")).theme, "dark");
+  });
+  it("without --pin, a binary that no longer matches the preserved pin is refused (dry run and --write), config untouched", async () => {
+    const bin = fakeBinary("old");
+    const f = seed(bin, { PROTON_DRIVE_BIN_SHA256: sha(bin), ...EXTRAS });
+    const before = readFileSync(f, "utf8");
+    const oldHash = sha(bin);
+    appendFileSync(bin, "// upgraded\n");
+    for (const extra of [[], ["--write"]]) {
+      const r = await run(["setup-claude-desktop", "--config", f, ...extra], { PROTON_DRIVE_BIN: bin });
+      assert.equal(r.code, 1, r.stdout);
+      assert.ok(r.stderr.includes(oldHash), "names the pinned hash");
+      assert.ok(r.stderr.includes(sha(bin)), "names the new hash");
+      assert.match(r.stderr, /--pin/);
+    }
+    assert.equal(readFileSync(f, "utf8"), before);
+  });
+  it("--pin accepts the new binary and updates the pin, still keeping extras", async () => {
+    const bin = fakeBinary("old2");
+    const f = seed(bin, { PROTON_DRIVE_BIN_SHA256: sha(bin), ...EXTRAS });
+    appendFileSync(bin, "// upgraded\n");
+    const r = await run(["setup-claude-desktop", "--config", f, "--write", "--pin"], { PROTON_DRIVE_BIN: bin });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(entryOf(f).env.PROTON_DRIVE_BIN_SHA256, sha(bin));
+    assert.equal(entryOf(f).env.PROTON_DRIVE_SHARE_POLICY, "strict");
+  });
+  it("a malformed preserved pin is not silently dropped: refused until --pin", async () => {
+    const f = seed(FAKE_CLI, { PROTON_DRIVE_BIN_SHA256: "garbage" });
+    const r = await run(["setup-claude-desktop", "--config", f, "--write"]);
+    assert.equal(r.code, 1);
+    assert.equal(entryOf(f).env.PROTON_DRIVE_BIN_SHA256, "garbage");
+  });
+  it("no existing pin and no --pin: nothing is added", async () => {
+    const f = seed(FAKE_CLI, EXTRAS);
+    const r = await run(["setup-claude-desktop", "--config", f, "--write"]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(entryOf(f).env.PROTON_DRIVE_BIN_SHA256, undefined);
+  });
+});
+
 describe("doctor reads the pin from the Claude Desktop entry", () => {
   const write = (bin, env) => {
     const f = join(tmp(), "c.json");
@@ -104,6 +162,16 @@ describe("doctor reads the pin from the Claude Desktop entry", () => {
   it("malformed entry pin: fail", async () => {
     const r = await doctor(write(FAKE_CLI, { PROTON_DRIVE_BIN_SHA256: "not-a-hash" }));
     assert.equal(integrity(r).status, "fail");
+  });
+  it("entry without a pin warns even when the shell has one; a mismatch shows pinned vs actual", async () => {
+    const f = write(FAKE_CLI, {});
+    const r = await run(["doctor", "--json", "--config", f], { PROTON_DRIVE_BIN_SHA256: sha(FAKE_CLI) });
+    const c = JSON.parse(r.stdout).checks.find((x) => x.id === "cli-integrity-entry");
+    assert.equal(c.status, "warn");
+    assert.match(c.message, /no PROTON_DRIVE_BIN_SHA256/);
+    const bad = await doctor(write(FAKE_CLI, { PROTON_DRIVE_BIN_SHA256: "a".repeat(64) }));
+    assert.ok(integrity(bad).message.includes("a".repeat(12)));
+    assert.ok(integrity(bad).message.includes(sha(FAKE_CLI).slice(0, 12)));
   });
   it("no pin anywhere: still the warn", async () => {
     const r = await doctor(write(FAKE_CLI, {}));

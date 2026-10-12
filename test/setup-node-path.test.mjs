@@ -3,7 +3,7 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, symlinkSync, copyFileSync, chmodSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, chmodSync as chmod2, copyFileSync, chmodSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSandbox, fakeEnv, DIST_CLI } from "./helpers/mcp-client.mjs";
@@ -68,5 +68,19 @@ describe("setup-claude-desktop: stable node path", () => {
     const d = tmp();
     symlinkSync(join(d, "missing"), join(d, "node"));
     assert.equal((await setupDryRun(d)).command, process.execPath);
+  });
+  it("ignores a symlink whose realpath is a different executable", async () => {
+    const d = tmp(), t = tmp();
+    writeFileSync(join(t, "other-node"), "#!/bin/sh\n"); chmodSync(join(t, "other-node"), 0o755);
+    symlinkSync(join(t, "other-node"), join(d, "node"));
+    assert.equal((await setupDryRun(d)).command, process.execPath);
+  });
+  it("ignores a directory that group or others can write to (anyone could swap the link)", async () => {
+    const d = tmp();
+    symlinkSync(process.execPath, join(d, "node"));
+    chmod2(d, 0o777);
+    assert.equal((await setupDryRun(d)).command, process.execPath);
+    chmod2(d, 0o755);
+    assert.equal((await setupDryRun(d)).command, join(d, "node"));
   });
 });
