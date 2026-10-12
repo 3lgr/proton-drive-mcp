@@ -50,6 +50,14 @@ export {
   unescapeName, splitRemotePath, joinRemote,
 } from "./driveShape.js";
 
+/** A trashed item is one real entry directly below the trash root: never "." or ".." (they would resolve to a folder). */
+function assertTrashTargetSane(target: string): void {
+  const name = splitRemotePath(target).name;
+  if (!TRASH_ITEM_RE.test(target) || name === "." || name === "..") {
+    throw new Error("the trash item resolves to a name that is not a valid trash item (empty, '.' or '..', or not directly below the trash); refusing to act on it.");
+  }
+}
+
 export class DriveService {
   private readonly run: Runner;
   private readonly runRaw: RawRunner;
@@ -556,6 +564,7 @@ export class DriveService {
       }
       target = item.path;
     }
+    assertTrashTargetSane(target); // N-03: also for a target that came from a uid, not only for a caller-typed path
     const matches = trashed.filter((f) => f.path === target);
     if (matches.length > 1) {
       const list = matches.map((f) => `uid ${f.uid ?? "?"} (trashed ${f.trashedAt ?? "unknown"})`).join("; ");
