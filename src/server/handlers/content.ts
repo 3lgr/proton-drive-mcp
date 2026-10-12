@@ -1,4 +1,5 @@
 // Handlers: File content and sync-folder tools.
+import { envFlag, SYNC_WRITE_ENV } from "../../utils/envFlag.js";
 import { validateRemotePath } from "../../utils/validation.js";
 import { getSyncRoot, readSyncFile, writeSyncFile, syncFileExists, precheckSyncWrite } from "../../utils/syncfs.js";
 import { readDriveContent } from "../../services/content.js";
@@ -22,6 +23,8 @@ export const contentHandlers: Record<string, Handler> = {
     return ok({ path: readPath, content });
   },
   drive_write_file: async (a, { drive, gate, assertConsent, sharePolicy }) => {
+    // N-02: fail closed. The operator must opt in; the sync folder is trusted by other programs.
+    if (!envFlag(SYNC_WRITE_ENV)) return fail(`drive_write_file is disabled. The operator can enable it with ${SYNC_WRITE_ENV}=1 (accepting that the model can write plain data files into the sync folder).`);
     const syncRoot = getSyncRoot();
     if (!syncRoot) return fail("PROTON_DRIVE_SYNC_PATH is not set. Set it to the root of your Proton Drive sync folder.");
     if (typeof a.content !== "string") return fail("content must be a string");

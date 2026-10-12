@@ -25,9 +25,9 @@ describe("syncfs hardening", () => {
     await mkdir(join(root, "real"));
     await writeFile(join(root, "real", "ok.txt"), "fine");
     await symlink(outside, join(root, "escape-dir"));
-    await symlink(join(outside, "secret.txt"), join(root, "escape-file"));
+    await symlink(join(outside, "secret.txt"), join(root, "escape-file.txt"));
     await symlink(join(root, "real"), join(root, "inner-dir"));
-    await symlink(join(root, "real", "ok.txt"), join(root, "inner-file"));
+    await symlink(join(root, "real", "ok.txt"), join(root, "inner-file.txt"));
     await symlink(join(base, "does-not-exist"), join(root, "dangling"));
   });
   after(() => rm(base, { recursive: true, force: true }));
@@ -37,7 +37,7 @@ describe("syncfs hardening", () => {
   });
 
   it("read of escaping file symlink is rejected", async () => {
-    await assert.rejects(() => readSyncFile(root, "/escape-file"), /outside sync root/);
+    await assert.rejects(() => readSyncFile(root, "/escape-file.txt"), /outside sync root/);
   });
 
   it("read of dangling symlink is rejected", async () => {
@@ -55,15 +55,15 @@ describe("syncfs hardening", () => {
   });
 
   it("write onto an existing symlink is refused (in-root and escaping)", async () => {
-    await assert.rejects(() => writeSyncFile(root, "/escape-file", "x"), /outside sync root|symlink/);
+    await assert.rejects(() => writeSyncFile(root, "/escape-file.txt", "x"), /outside sync root|symlink/);
     assert.equal(await readFile(join(outside, "secret.txt"), "utf8"), "TOPSECRET");
-    await assert.rejects(() => writeSyncFile(root, "/inner-file", "x"), /symlink/);
+    await assert.rejects(() => writeSyncFile(root, "/inner-file.txt", "x"), /symlink/);
     assert.equal(await readFile(join(root, "real", "ok.txt"), "utf8"), "fine");
   });
 
   it("in-root symlinked directory that stays inside works for read and write", async () => {
     assert.equal(await readSyncFile(root, "/inner-dir/ok.txt"), "fine");
-    assert.equal(await readSyncFile(root, "/inner-file"), "fine");
+    assert.equal(await readSyncFile(root, "/inner-file.txt"), "fine");
     await writeSyncFile(root, "/inner-dir/new.txt", "hello");
     assert.equal(await readFile(join(root, "real", "new.txt"), "utf8"), "hello");
   });
@@ -128,8 +128,8 @@ describe("syncfs hardening", () => {
     assert.equal(await syncFileExists(root, "/real/ok.txt"), true);
     assert.equal(await syncFileExists(root, "/real/missing.txt"), false);
     assert.equal(await syncFileExists(root, "/no/such/dir/x"), false);
-    assert.equal(await syncFileExists(root, "/inner-file"), true);
-    await assert.rejects(() => syncFileExists(root, "/escape-file"), /outside sync root/);
+    assert.equal(await syncFileExists(root, "/inner-file.txt"), true);
+    await assert.rejects(() => syncFileExists(root, "/escape-file.txt"), /outside sync root/);
     await assert.rejects(() => syncFileExists(root, "/escape-dir/secret.txt"), /outside sync root/);
     await assert.rejects(() => syncFileExists(root, "/../outside/secret.txt"), /outside sync root/);
   });
