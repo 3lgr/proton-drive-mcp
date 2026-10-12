@@ -44,7 +44,26 @@ An assistant that can delete, share and download files is only as safe as the we
 | `PROTON_DRIVE_UPLOAD_MAX_BYTES` / `PROTON_DRIVE_DOWNLOAD_MAX_BYTES` | Ceilings for the upload snapshot and for one download. |
 
 The full table is under [Environment variables](#environment-variables). Behaviour changes that can break existing
-setups are listed in the [CHANGELOG](CHANGELOG.md) under 2.0.0.
+setups are listed in the [CHANGELOG](CHANGELOG.md) under 2.0.0 and 2.0.1.
+
+### Fixed in 2.0.1 (independent final review)
+
+- **Shared destinations (N-01).** The "destination is already shared" gate now fails closed: a sharing lookup that
+  fails counts as shared (the human is asked, and the prompt says the state could not be verified), the destination
+  **and every ancestor** are checked, and the same gate covers `drive_upload`, `photos_add_to_album` (shared albums)
+  and bulk moves, besides `drive_move` / `drive_copy`. `photos_upload` goes to your private timeline and has no
+  destination to gate.
+- **Sync-folder tools (N-02).** `drive_write_file` was **removed** (breaking, deliberate): a model that can write into
+  a folder that other programs trust (git hooks, shell rc files, editor tasks, CI workflows) can plant code, and that
+  cannot be made safe by a denylist. `drive_read_file` compares names the way the file system does and refuses known
+  secrets. To put a file in Drive use `drive_upload` from the allowlisted local folder.
+- **Delete by uid (N-03).** The approval prompt shows the item's resolved, escaped name, not just a uid; names that
+  resolve to `.` or `..` are refused.
+- **Scratch directories (N-05, N-07).** All temporary directories live under a private base the server owns, with an
+  ownership marker; the startup sweep deletes only marked, old, orphaned ones and never touches a user folder or the
+  verified CLI copy.
+- **`PROTON_DRIVE_PASS_ENV` (N-08).** `*` alone and prefixes shorter than 3 characters are refused; any use is listed by
+  `doctor`.
 
 ## Quick start
 
@@ -123,6 +142,10 @@ node dist/index.js        # the MCP server
 Release bundles (`.mcpb`) are attached to GitHub releases with a `SHA256SUMS` file and a build-provenance attestation
 (`gh attestation verify <file> --repo 3lgr/proton-drive-mcp`). Do not run a floating version (`npx -y <name>` with no
 version) of a program that holds your Proton session.
+
+> **The npm package named `proton-drive-mcp` is the upstream project, not this fork.** `npx proton-drive-mcp` (or
+> `npx -y proton-drive-mcp`) installs and runs upstream code, which has none of the controls described here. This fork
+> is installed from the repository, pinned to a tag, as shown above.
 
 ---
 
@@ -471,7 +494,7 @@ The server offers four MCP prompts (also declared in the MCPB manifest): `organi
 
 ### Token cost
 
-`tools/list` is sent to the model in every session. Measured payload (JSON bytes): `full` 40.1 KB (46 tools), `core` 17.9 KB (19 tools). Set `PROTON_DRIVE_TOOL_TIER=core` to load only:
+`tools/list` is sent to the model in every session. Measured payload (JSON bytes): `full` 39.9 KB (46 tools), `core` 18.6 KB (19 tools). Set `PROTON_DRIVE_TOOL_TIER=core` to load only:
 
 `drive_auth_status`, `drive_version`, `drive_list`, `drive_info`, `drive_read_content`, `drive_list_trash`, `drive_search`, `drive_tree`, `drive_mkdir`, `drive_upload`, `drive_download`, `drive_rename`, `drive_move`, `drive_copy`, `drive_trash`, `drive_restore`, `drive_share_status`, `photos_list_timeline`, `photos_download`.
 
@@ -492,7 +515,9 @@ Limits of this fork's hardening (the closed CLI cannot be inspected):
 
 - Whether the CLI sanitises remote names, follows symlinks on upload, or treats unusual paths is **not verifiable**; the server validates before and after the CLI runs and refuses when it cannot be sure.
 - Link passwords are passed to the CLI as an argument (visible in the process list of the machine for the duration of the call); they are never logged or returned.
-- Moving or copying an item into a folder that is already shared exposes it to that folder's members; the sharing policy does not inspect the destination's members.
+- Moving, copying, uploading or adding to an album **inside a shared folder or album** asks the human first (the destination and its ancestors are checked; a failed lookup counts as shared). On a client **without** elicitation that gate is still a model-supplied `confirmed: true` (it is not one of the strict tools), so use a client that can ask. The sharing policy does not inspect who the members are.
+- **The closed CLI can write outside the staging folder.** The server hands the CLI a private staging directory and validates what arrives there, but a CLI that writes somewhere else (another path, a cache, a temp file) is not observed and cannot be stopped by this server. It is inherent to wrapping a closed binary; pin the binary (`PROTON_DRIVE_BIN_SHA256`) and keep it up to date.
+- A scratch directory left by a killed process (SIGKILL) is removed at the next start only if it is marked, old and its creator is gone; otherwise it stays (an orphan is preferred to deleting something that is not ours).
 - The text inside an untrusted envelope can still try to persuade a model. The envelope and markers lower the odds; they are not a guarantee.
 - Document formats (PDF, Office) are not parsed at all; only plain UTF-8 text is read.
 - Fail-closed choices can reject legitimate input: `.key` files (Keynote), uploads with hardlinks or symlinks, downloads of folders that cannot be listed completely.
@@ -583,23 +608,25 @@ The CLI generates WebP thumbnails by default using Bun's image API. If Bun isn't
 **Custom binary path**  
 If the `proton-drive` binary is installed under a non-standard name or location, set `PROTON_DRIVE_BIN` in your environment:
 ```bash
-PROTON_DRIVE_BIN=/usr/local/bin/proton-drive npx proton-drive-mcp
+PROTON_DRIVE_BIN=/usr/local/bin/proton-drive proton-drive-mcp
 ```
-Or in Claude Desktop config:
+(after `npm install -g github:3lgr/proton-drive-mcp#v2.0.1`; do **not** use `npx proton-drive-mcp`, which is the upstream
+package). Or in Claude Desktop config, pointing at the pinned install:
 ```json
 {
   "mcpServers": {
     "proton-drive-mcp": {
-      "command": "npx",
-      "args": ["-y", "proton-drive-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/proton-drive-mcp/dist/index.js"],
       "env": { "PROTON_DRIVE_BIN": "/usr/local/bin/proton-drive" }
     }
   }
 }
 ```
+Find the path with `npm root -g` (global install from the tag) or use your clone's `dist/index.js`.
 
 **Windows**  
-Windows is not supported (see [Platform support](#platform-support)). If you try anyway, use the full path to the launcher in your Claude Desktop config if `npx` can't find it:
+Windows is not supported (see [Platform support](#platform-support)). If you try anyway, use the full path to the launcher in your Claude Desktop config if the command can't be found:
 ```json
 {
   "mcpServers": {

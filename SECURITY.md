@@ -39,9 +39,10 @@ What the server enforces itself (so the model cannot talk its way past it):
 
 - consent for irreversible or outward-facing actions: the human is always asked when the client supports MCP
   elicitation; otherwise those tools fail closed unless the operator opts in (`PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE=1`);
-- local file policy: credential denylist, optional allowlist (`PROTON_DRIVE_LOCAL_ROOT`), staged and planned downloads,
+- local file policy: an allowlist of local folders (default `~/ProtonDriveMCP`, or `PROTON_DRIVE_LOCAL_ROOT`) with the credential denylist as a second layer, staged and planned downloads,
   snapshotted and manifest-bound uploads, no symlinks/hardlinks/special files;
-- sharing policy for links and invitations;
+- sharing policy for links and invitations, and a gate for putting data into a folder or album that is already shared (the destination and its ancestors are checked; a failed lookup counts as shared);
+- no tool writes into the local sync folder (`drive_write_file` was removed in 2.0.1); `drive_read_file` refuses known secrets;
 - untrusted-content envelope and sanitiser for every string that comes from Drive; allowlist-only logs and errors;
 - binary pinning and a private verified copy (`PROTON_DRIVE_BIN_SHA256`), minimal child environment;
 - no document parsing at all: `drive_read_content` reads plain UTF-8 text only (PDF/Office parsers were removed to keep the attack surface small).
@@ -49,7 +50,7 @@ What the server enforces itself (so the model cannot talk its way past it):
 What it does not do:
 
 - it cannot make the model's own reasoning trustworthy; the envelope and markers raise the bar, they are not a proof;
-- it cannot verify what the closed CLI does with names it is given (see "Limitations" in the README);
+- it cannot verify what the closed CLI does with names it is given, and it cannot detect a CLI that writes outside the staging folder it was handed (see "Known limitations" in the README);
 - it does not protect against a malicious local user or a compromised machine (the session lives in your keychain);
 - Windows is untested and unsupported.
 

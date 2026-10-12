@@ -2,7 +2,49 @@
 
 ## 2.0.1 - 2026-10-12
 
-Fixes from the independent post-release review. No behaviour change in the server.
+Fixes from the independent post-release reviews. **One deliberate breaking change: `drive_write_file` is removed
+(46 tools).** Other fixes tighten behaviour that the 2.0.0 gates did not cover.
+
+### Breaking change
+- **`drive_write_file` removed.** Writing into a local sync folder cannot be made safe against planted
+  executables/config (git hooks, shell rc files, editor tasks, CI workflows, build scripts, agent settings); every
+  denylist and allowlist attempt left a gap. Use `drive_upload` from the allowlisted local directory instead. The tool
+  count is 46; the companion CLI mirrors 45 of them (`drive_read_file` is MCP-only). `drive_read_file` stays, with
+  contained reads (`realpath.native`, `O_NOFOLLOW`), names compared as the file system does (NFKC, case, invisible
+  characters, trailing dots/spaces) and known secrets (`.env*`, `id_*`, `*.pem`, `*.key`, `.ssh/`, `.aws/`,
+  `.git/config`...) refused unless `PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1`.
+
+### Security fixes
+- **N-01 shared destinations.** The gate was fail-open (a failed sharing lookup meant "not shared") and shallow (only
+  the destination itself was looked up). It now fails closed with `PROTON_DRIVE_SHARE_POLICY=strict`, checks the
+  destination and every ancestor (per-call cache; a not-yet-existing destination is judged by its ancestors), and covers
+  `drive_upload` (download plus upload used to equal a copy into a shared folder without a human), `photos_add_to_album`
+  (shared albums), `drive_bulk_move`, `drive_move` and `drive_copy`. `photos_upload` targets the private timeline and has
+  no destination. Prompts say when the sharing state could not be verified.
+- **N-02 sync-folder tools.** See the breaking change above (`drive_read_file` ignored the secret-name rules and
+  dot-file/hook locations).
+- **N-03 delete by uid.** The prompt resolves the uid to its `/trash/<name>` path first (unknown, duplicate or invalid
+  names are refused before anyone is asked) and shows the escaped name next to the uid; a name that resolves to `.`
+  or `..` is rejected before any spawn.
+- **N-04 error text.** Download-plan and download-guard errors name remote items by marker (length + salted hash), and
+  list-shape parse errors name the JSON type plus a marker instead of 100 characters of CLI output.
+- **N-05 / N-07 scratch directories.** Download staging no longer sits beside the destination (for a destination equal
+  to the allowed root that was its parent, e.g. `$HOME`, outside the allowlist). All scratch directories are created
+  under a private base the server owns (`<tmp>/pdmcp-private-<uid>` or `<allowed root>/.pdmcp-private`, 0700) with an
+  ownership marker. The startup sweep looks only there and deletes only real 0700 directories of this uid with a valid
+  marker, old enough, whose creator pid is gone, without following links. `pdmcp-bin-*` (the verified CLI copy a
+  sibling instance runs) is never swept.
+- **N-08 `PROTON_DRIVE_PASS_ENV`.** `*` alone and prefixes shorter than 3 characters are refused; any use of the
+  variable, and any refused value, is listed by `doctor` (`activeOptOuts`).
+
+### Documentation
+- N-06 (documented, no code): a closed CLI that writes outside the staging folder it was handed is not detected; see
+  the README "Known limitations" and `SECURITY.md`.
+- The README no longer shows a floating `npx -y proton-drive-mcp`, which installs the upstream package; it now says so
+  explicitly and shows the pinned install (`github:3lgr/proton-drive-mcp#v2.0.1`). `SECURITY.md` no longer calls the
+  local allowlist optional (the default is `~/ProtonDriveMCP`). Tool counts are updated (46; `tools/list` about 39.9 KB).
+
+### Other fixes in this release
 
 - **CI:** fixed a flaky test (the fake CLI wrote its environment dump non-atomically, so a concurrent reader could see a
   truncated file); the dump is now written to a temporary file and renamed.
