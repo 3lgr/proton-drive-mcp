@@ -285,6 +285,41 @@ describe("assertLocalPathAllowed", () => {
     }
   });
 
+  // F-03: realpath (JS) does not normalise case, so ~/.SSH escaped the denylist on case-insensitive volumes.
+  const CASE_INSENSITIVE = process.platform === "darwin" || process.platform === "win32";
+  for (const rel of [".SSH/id_x", ".Ssh", ".AWS/credentials", ".GnuPG/pubring.kbx", ".Config/GCloud/credentials.db", "LIBRARY/keychains/login.keychain-db", ".CLAUDE/settings.json", ".Claude.JSON"]) {
+    it(`denies case variant ~/${rel} (nothing of that spelling exists on disk)`, { skip: !CASE_INSENSITIVE && "case-sensitive platform" }, () => {
+      assert.throws(() => assertLocalPathAllowed(join(home, rel)), /protected location|secret file/);
+    });
+  }
+
+  it("denies a case variant of /etc", { skip: !CASE_INSENSITIVE && "case-sensitive platform" }, () => {
+    assert.throws(() => assertLocalPathAllowed("/ETC/passwd"), /protected location/);
+    assert.throws(() => assertLocalPathAllowed("/Private/Etc/hosts"), /protected location/);
+  });
+
+  it("denies the case variant of a real, existing protected directory (scan and plain)", { skip: !CASE_INSENSITIVE && "case-sensitive platform" }, async () => {
+    const fakeHome = join(base, "fakehome-case");
+    await mkdir(join(fakeHome, ".ssh"), { recursive: true });
+    const savedHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    try {
+      assert.throws(() => assertLocalPathAllowed(join(fakeHome, ".SSH", "authorized_keys")), /protected location/);
+      assert.throws(() => assertLocalPathAllowed(join(fakeHome, ".sSh")), /protected location/);
+    } finally {
+      process.env.HOME = savedHome;
+    }
+  });
+
+  it("a case variant of the HOME prefix itself is still recognised", { skip: !CASE_INSENSITIVE && "case-sensitive platform" }, () => {
+    assert.throws(() => assertLocalPathAllowed(join(home.toUpperCase(), ".ssh", "id_x")), /protected location/);
+  });
+
+  it("does not over-match: a sibling that merely shares a prefix stays allowed", () => {
+    assertLocalPathAllowed(join(home, ".ssh-backup-notes", "a.txt"));
+    assertLocalPathAllowed(join(home, ".awsome", "a.txt"));
+  });
+
   it("opt-out does not disable an explicit LOCAL_ROOT", async () => {
     const a = join(base, "rootD");
     await mkdir(a, { recursive: true });
