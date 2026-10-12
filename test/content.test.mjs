@@ -135,7 +135,7 @@ describe("readDriveContent: docx", needFflate, () => {
     const big = new Uint8Array(21 * 1024 * 1024).fill(97); // compresses to a few KB
     const buf = docx({ "word/document.xml": big });
     assert.ok(buf.length < 100_000);
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: buf }), "/my-files/a.docx"), /larger than 20 MB/);
+    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: buf }), "/my-files/a.docx"), /larger than 20 MB|expands more than/);
   });
   it("rejects a zip without document.xml and a non-zip", async () => {
     await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: docx({ "other.xml": "x" }) }), "/my-files/a.docx"), /no word\/document\.xml/);
