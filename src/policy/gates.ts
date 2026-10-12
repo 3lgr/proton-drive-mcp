@@ -74,11 +74,12 @@ export const GATES: Readonly<Record<string, GateSpec>> = {
     strict: true, applies: always, describe: "always", cliConfirm: false,
     consequence: "removes your own access to a shared folder.",
   },
+  // `sharedDestination` is set by the handler (never the model) after looking the destination and its ancestors up.
   drive_upload: {
     strict: false, cliConfirm: true,
-    applies: (a) => a.fileConflictStrategy === "replace" || a.folderConflictStrategy === "replace",
-    describe: { when: "when fileConflictStrategy or folderConflictStrategy is 'replace' (it trashes the existing remote item)" },
-    consequence: "with strategy 'replace' trashes the existing remote item.",
+    applies: (a) => a.fileConflictStrategy === "replace" || a.folderConflictStrategy === "replace" || a.sharedDestination === true,
+    describe: { when: "when a conflict strategy is 'replace' (it trashes the existing remote item) or the destination is shared" },
+    consequence: "uploads into the destination; with strategy 'replace' it trashes the existing remote item, and when the destination is shared with other people they will be able to see the upload.",
   },
   // Deleting LOCAL data cannot be undone from here, so unlike remote replace this one is strict.
   drive_download: {
@@ -94,10 +95,11 @@ export const GATES: Readonly<Record<string, GateSpec>> = {
     consequence: "with conflictStrategy 'remove' deletes the existing LOCAL file before downloading.",
   },
   drive_write_file: {
-    // The handler always evaluates the gate and reports whether the write would overwrite (`overwrite`).
-    strict: false, applies: (a) => a.overwrite === true, cliConfirm: false,
-    describe: { when: "when the file already exists (it would be overwritten)" },
-    consequence: "would overwrite an existing file in the sync folder.",
+    // The handler always evaluates the gate and reports whether the write would overwrite (`overwrite`) and
+    // whether the folder is shared (`sharedDestination`).
+    strict: false, applies: (a) => a.overwrite === true || a.sharedDestination === true, cliConfirm: false,
+    describe: { when: "when the file already exists (it would be overwritten) or its folder is shared" },
+    consequence: "writes into the sync folder: it overwrites an existing file, or the new file becomes visible to the people the folder is shared with.",
   },
   // Moving or copying into a folder that is ALREADY shared exposes the item to its members. The handlers set
   // `sharedDestination` (never the model: the schema has no such argument) after looking the destination up.
@@ -110,6 +112,12 @@ export const GATES: Readonly<Record<string, GateSpec>> = {
     strict: false, cliConfirm: false, describe: { when: "when the destination folder is already shared with other people (the copy would become visible to them)" },
     applies: (a) => a.sharedDestination === true,
     consequence: "copies the item into a folder that is already shared with other people, so they will be able to see the copy.",
+  },
+  // Adding to an album that is already shared exposes the photo to its members. The handler sets `sharedDestination`.
+  photos_add_to_album: {
+    strict: false, cliConfirm: false, describe: { when: "when the album is shared" },
+    applies: (a) => a.sharedDestination === true,
+    consequence: "adds the photo to an album that is shared with other people (or whose sharing could not be verified), so they will be able to see it.",
   },
   photos_remove_from_album: {
     strict: false, applies: always, describe: "always", cliConfirm: false,

@@ -20,6 +20,10 @@
 //   FAKE_TRANSIENT_KIND   transient-then-json: ratelimit | timeout | reset | retryafter | notfound (counter via FAKE_COUNTER)
 //   FAKE_TRANSIENT_TIMES  transient-then-json: how many calls fail first (default 1)
 //   FAKE_STDOUT       payload printed in json / ansi-prefixed-json mode (default "[]")
+//   FAKE_SHARE_MAP    json mode: JSON {"<path>": <`sharing status` payload> | "ERR:<stderr text>"} answering `sharing status <path>`
+//                     (a path missing from the map prints the literal "undefined", like the real CLI for an unshared item)
+//   FAKE_LIST_MAP     json mode: JSON {"<folder path>": <list payload>} answering `filesystem list <path>` (others use FAKE_STDOUT)
+//   FAKE_ALBUMS       json mode: `album list` payload (JSON array); other commands keep using FAKE_STDOUT
 //   FAKE_SLEEP_MS     delay before answering in json mode
 //   FAKE_PIDFILE      hang mode appends {role,pid,argv0} lines (child + grandchild)
 //   FAKE_CLI_VERSION  version text override for `version` (default: CLI 0.8.0 / SDK 0.21.0 text; set verbatim, e.g. "garbage")
@@ -64,6 +68,20 @@ const payload = process.env.FAKE_STDOUT ?? "[]";
 
 switch (mode) {
   case "json": {
+    if (process.env.FAKE_SHARE_MAP && argv[0] === "sharing" && argv[1] === "status") {
+      const entry = JSON.parse(process.env.FAKE_SHARE_MAP)[argv[2]];
+      if (typeof entry === "string" && entry.startsWith("ERR:")) { process.stderr.write(entry.slice(4) + "\n"); process.exit(1); }
+      process.stdout.write((entry === undefined ? "undefined" : JSON.stringify(entry)) + "\n");
+      process.exit(0);
+    }
+    if (process.env.FAKE_LIST_MAP && argv[0] === "filesystem" && argv[1] === "list") {
+      const entry = JSON.parse(process.env.FAKE_LIST_MAP)[argv[2]];
+      if (entry !== undefined) { process.stdout.write(JSON.stringify(entry) + "\n"); process.exit(0); }
+    }
+    if (process.env.FAKE_ALBUMS && argv[0] === "album" && argv[1] === "list") {
+      process.stdout.write(process.env.FAKE_ALBUMS + "\n");
+      process.exit(0);
+    }
     const ms = Number(process.env.FAKE_SLEEP_MS ?? 0);
     setTimeout(() => { process.stdout.write(payload + "\n"); process.exit(0); }, ms);
     break;

@@ -1,6 +1,8 @@
 // Handlers: Photos and albums.
 import { validateRemotePath, validateLocalPath, validateName } from "../../utils/validation.js";
 import { GATES } from "../../policy/gates.js";
+import { approvalField } from "../../policy/untrusted.js";
+import { albumShare, sharedDestinationNote } from "../../policy/sharedDestination.js";
 import { precheckUpload, withUploadSnapshot } from "../../services/uploadSnapshot.js";
 import { freezePhotoDownload, precheckPhotoDownload, safePhotoDownload, describePhotoDownload } from "../../services/downloadGuard.js";
 import { PHOTO_UPLOAD_STRATEGIES, PHOTO_DOWNLOAD_STRATEGIES, parseStrategy } from "../../policy/strategies.js";
@@ -37,11 +39,14 @@ export const photosHandlers: Record<string, Handler> = {
     if (!albumListPath.startsWith("/albums/")) return fail("albumPath must start with /albums/");
     return ok(paginate((await drive.listAlbumPhotos(albumListPath, a.loadDetails === true)).sort(photoOrder), a, PAGE_DEFAULTS.photos_list_album_photos));
   },
-  photos_add_to_album: async (a, { drive }) => {
+  photos_add_to_album: async (a, { drive, gate, sharePolicy }) => {
     const addAlbumPath = validateRemotePath(a.albumPath);
     const addPhotoPath = validateRemotePath(a.photoPath);
     if (!addAlbumPath.startsWith("/albums/")) return fail("albumPath must start with /albums/");
     if (!addPhotoPath.startsWith("/photos/")) return fail("photoPath must start with /photos/");
+    const share = await albumShare(drive, sharePolicy, addAlbumPath);
+    await gate("photos_add_to_album", { ...a, sharedDestination: share.shared },
+      `photos_add_to_album needs your approval. It ${GATES.photos_add_to_album!.consequence}\nalbumPath: ${approvalField(addAlbumPath)}\nphotoPath: ${approvalField(addPhotoPath)}${sharedDestinationNote(share)}`);
     await drive.addPhotoToAlbum(addAlbumPath, addPhotoPath);
     return ok({ message: `Added ${addPhotoPath} to ${addAlbumPath}` });
   },
