@@ -76,8 +76,10 @@ try {
   const outDir = join(root, "out", "mcpb");
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, `proton-drive-mcp-${pkg.version}.mcpb`);
-  run("npx", ["--yes", "@anthropic-ai/mcpb@2.1.2", "validate", join(staging, "manifest.json")], { cwd: root, stdio: "inherit" });
-  run("npx", ["--yes", "@anthropic-ai/mcpb@2.1.2", "pack", staging, outFile], { cwd: root, stdio: "inherit" });
+  // The packer is fetched by exact version; lifecycle scripts of it and its dependencies are never run.
+  const packerEnv = { ...process.env, NPM_CONFIG_IGNORE_SCRIPTS: "true" };
+  run("npx", ["--yes", "@anthropic-ai/mcpb@2.1.2", "validate", join(staging, "manifest.json")], { cwd: root, stdio: "inherit", env: packerEnv });
+  run("npx", ["--yes", "@anthropic-ai/mcpb@2.1.2", "pack", staging, outFile], { cwd: root, stdio: "inherit", env: packerEnv });
   console.log(`Built ${outFile}`);
 } finally {
   rmSync(staging, { recursive: true, force: true });

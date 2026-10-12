@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.1 - 2026-10-12
+
+Fixes from the independent post-release review. No behaviour change in the server.
+
+- **CI:** fixed a flaky test (the fake CLI wrote its environment dump non-atomically, so a concurrent reader could see a
+  truncated file); the dump is now written to a temporary file and renamed.
+- **Docs:** `drive_read_content` in the README no longer claims `.docx`/`.pdf` support (removed in 2.0.0); `SECURITY.md` no
+  longer mentions a document-extraction switch that does not exist.
+- **Build:** the MCPB packer (`@anthropic-ai/mcpb@2.1.2`) is run with lifecycle scripts disabled; CI installs with `--ignore-scripts`.
+- **Packaging:** the license file uses standard MIT copyright lines so the license is detected; install pins point to `v2.0.1`.
+
 ## 2.0.0 (hardened fork) - 2026-10-12
 
 First release of the `@3lgr/proton-drive-mcp` fork of googlarz/proton-drive-mcp 1.5.2. The 47 tools and their names

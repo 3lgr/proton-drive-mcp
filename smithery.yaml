@@ -71,6 +71,6 @@ startCommand:
     (config) => ({
       // Pinned to a release tag on purpose: never run a floating version of a program that holds your session.
       command: "npx",
-      args: ["--yes", "github:3lgr/proton-drive-mcp#v2.0.0"],
+      args: ["--yes", "github:3lgr/proton-drive-mcp#v2.0.1"],
       env: config.PROTON_DRIVE_SYNC_PATH ? { PROTON_DRIVE_SYNC_PATH: config.PROTON_DRIVE_SYNC_PATH } : {}
     })

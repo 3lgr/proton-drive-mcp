@@ -30,7 +30,12 @@ import { basename, dirname, join } from "node:path";
 
 const argv = process.argv.slice(2);
 const mode = process.env.FAKE_MODE ?? "json";
-if (process.env.FAKE_ENV_DUMP) writeFileSync(process.env.FAKE_ENV_DUMP, JSON.stringify(Object.keys(process.env)));
+if (process.env.FAKE_ENV_DUMP) {
+  // Atomic: a reader never sees a truncated file while another invocation (e.g. `version`) is writing.
+  const tmp = `${process.env.FAKE_ENV_DUMP}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(Object.keys(process.env)));
+  renameSync(tmp, process.env.FAKE_ENV_DUMP);
+}
 const isVersion = argv[0] === "version";
 
 if (process.env.FAKE_ARGV_LOG) {
