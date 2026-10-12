@@ -1,14 +1,14 @@
 // F-04: uploads run from a validated private snapshot; any doubt refuses and nothing is sent.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync, chmodSync, utimesSync, readdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync, chmodSync, utimesSync, readdirSync, readFileSync, existsSync, renameSync, unlinkSync, appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, basename, dirname } from "node:path";
-import { planUploadSnapshot } from "../dist/services/uploadSnapshot.js";
+import { planUploadSnapshot, precheckUpload, withUploadSnapshot } from "../dist/services/uploadSnapshot.js";
 import { makeSandbox, startServer, nonVersionCalls } from "./helpers/mcp-client.mjs";
 
-const N = (name, kind = "file", children = [], extra = {}) => ({ name, kind, size: 1, nlink: 1, dev: 1, children, ...extra });
+const N = (name, kind = "file", children = [], extra = {}) => ({ name, kind, size: 1, nlink: 1, dev: 1, ino: 1, mtimeMs: 1, children, ...extra });
 const limits = (over = {}) => ({ maxEntries: 100, maxBytes: 100, isProtected: (_rel, name) => /^\.env$|\.pem$/.test(name), ...over });
 
 describe("planUploadSnapshot (pure)", () => {
@@ -117,4 +117,91 @@ describe("upload tools send a snapshot", () => {
       assert.deepEqual(paths.map((p) => basename(p)), ["one.jpg", "two.jpg"]);
     } finally { await c.close(); sb.cleanup(); }
   });
+});
+
+describe("snapshot integrity: approval, copy and spawn (fault injection)", () => {
+  let base;
+  before(() => { base = mkdtempSync(join(tmpdir(), "upfault-")); });
+  after(() => rmSync(base, { recursive: true, force: true }));
+  const mk = () => {
+    const d = mkdtempSync(join(base, "t-"));
+    mkdirSync(join(d, "p", "sub"), { recursive: true });
+    writeFileSync(join(d, "p", "a.txt"), "alpha");
+    writeFileSync(join(d, "p", "sub", "b.txt"), "beta");
+    return join(d, "p");
+  };
+  const attempt = async (root, opts = {}) => {
+    let reached = false;
+    try { await withUploadSnapshot([root], async () => { reached = true; return 1; }, opts); }
+    catch (e) { return { error: e, reached }; }
+    return { error: null, reached };
+  };
+  const stagesLeft = () => readdirSync(tmpdir()).filter((n) => n.startsWith("pdmcp-upload-")).length;
+
+  it("clean tree: callback runs, staging removed", async () => {
+    const root = mk();
+    const before = stagesLeft();
+    const r = await attempt(root, { approved: [precheckUpload(root)] });
+    assert.equal(r.error, null);
+    assert.equal(r.reached, true);
+    assert.equal(stagesLeft(), before);
+  });
+
+  it("a file replaced by a symlink between scan and copy is refused", async () => {
+    const root = mk();
+    const outside = join(base, "outside.txt"); writeFileSync(outside, "SECRET");
+    const r = await attempt(root, { hooks: { beforeCopy: (rel, src) => { if (rel === "a.txt") { unlinkSync(src); symlinkSync(outside, src); } } } });
+    assert.ok(r.error, "must refuse");
+    assert.equal(r.reached, false);
+  });
+
+  it("a file replaced by another regular file (new inode, same size) is refused", async () => {
+    const root = mk();
+    const r = await attempt(root, { hooks: { beforeCopy: (rel, src) => { if (rel === "a.txt") { unlinkSync(src); writeFileSync(src, "ALPHA"); } } } });
+    assert.match(String(r.error), /changed after it was scanned/);
+    assert.equal(r.reached, false);
+  });
+
+  it("an intermediate directory swapped for a symlink to look-alike content is refused (dev:ino mismatch)", async () => {
+    const root = mk();
+    const evil = join(base, "evil-" + Math.random().toString(36).slice(2)); mkdirSync(evil);
+    writeFileSync(join(evil, "b.txt"), "beta");
+    const r = await attempt(root, { hooks: { beforeCopy: (rel) => { if (rel === "sub/b.txt") { renameSync(join(root, "sub"), join(root, "sub.orig")); symlinkSync(evil, join(root, "sub")); } } } });
+    assert.ok(r.error, "must refuse");
+    assert.equal(r.reached, false);
+  });
+
+  it("an entry changed between approval and the upload is refused", async () => {
+    const root = mk();
+    const approved = [precheckUpload(root)];
+    appendFileSync(join(root, "a.txt"), "!");
+    const r = await attempt(root, { approved });
+    assert.match(String(r.error), /changed after it was approved/);
+    assert.equal(r.reached, false);
+  });
+
+  it("an entry added between approval and the upload is refused", async () => {
+    const root = mk();
+    const approved = [precheckUpload(root)];
+    writeFileSync(join(root, "new.txt"), "x");
+    const r = await attempt(root, { approved });
+    assert.match(String(r.error), /changed after it was approved/);
+  });
+
+  for (const [label, tamper, match] of [
+    ["content modified", (snap) => appendFileSync(join(snap, "a.txt"), "x"), /modified/],
+    ["file replaced with same size", (snap) => { unlinkSync(join(snap, "a.txt")); writeFileSync(join(snap, "a.txt"), "ALPHA"); }, /modified/],
+    ["entry added", (snap) => writeFileSync(join(snap, "extra.txt"), "x"), /modified/],
+    ["entry removed", (snap) => unlinkSync(join(snap, "a.txt")), /modified/],
+    ["file swapped for a symlink", (snap) => { unlinkSync(join(snap, "a.txt")); symlinkSync("/etc/hosts", join(snap, "a.txt")); }, /modified/],
+  ]) {
+    it(`the snapshot tampered before spawn (${label}) is refused`, async () => {
+      const root = mk();
+      const before = stagesLeft();
+      const r = await attempt(root, { hooks: { beforeSpawn: ([snap]) => tamper(snap) } });
+      assert.match(String(r.error), match);
+      assert.equal(r.reached, false);
+      assert.equal(stagesLeft(), before, "staging removed");
+    });
+  }
 });
