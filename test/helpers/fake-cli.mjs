@@ -11,6 +11,8 @@
 //   FAKE_TREE         tree mode: path to a JSON file {"<folder path>": [list items]}; `filesystem list <path>` serves that entry
 //                     (missing entry -> "Item not found" exit 1; a string entry is written to stderr, exit 1). Other commands print "[]".
 //                     tree mode extras: tree["__info__"] = {"<path>": node} answers `filesystem info <path>` (else "[]");
+//                     FAKE_DOWNLOAD_SWAP={path,to} replaces a directory by a symlink mid-transfer; FAKE_DOWNLOAD_FAIL=1 exits 1 after writing;
+//                     entries may carry symlinkTo | hardlinkTo | fifo | mode.
 //                     FAKE_DOWNLOAD_WRITE = JSON [{rel, content?, symlinkTo?}] is written under the destination folder by
 //                     `filesystem download` / `photo download`, which then print a TransferSummary.
 //   FAKE_COUNTER      locked-then-json: file holding the number of calls so far
@@ -22,8 +24,8 @@
 //   FAKE_PIDFILE      hang mode appends {role,pid,argv0} lines (child + grandchild)
 //   FAKE_CLI_VERSION  version text override for `version` (default: CLI 0.8.0 / SDK 0.21.0 text; set verbatim, e.g. "garbage")
 //   FAKE_HANG_VERSION 1 = `version` obeys FAKE_MODE (hang); otherwise it always prints version text
-import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { appendFileSync, chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -179,8 +181,18 @@ switch (mode) {
         const full = join(dest2, f.rel);
         mkdirSync(dirname(full), { recursive: true });
         if (f.symlinkTo) symlinkSync(f.symlinkTo, full);
+        else if (f.hardlinkTo) linkSync(f.hardlinkTo, full);
+        else if (f.fifo) execFileSync("mkfifo", [full]);
         else writeFileSync(full, f.content ?? "x");
+        if (f.mode !== undefined && !f.symlinkTo) chmodSync(full, f.mode);
       }
+      // FAKE_DOWNLOAD_SWAP = {path, to}: the real destination is replaced by a symlink while the transfer runs (TOCTOU).
+      if (process.env.FAKE_DOWNLOAD_SWAP) {
+        const sw = JSON.parse(process.env.FAKE_DOWNLOAD_SWAP);
+        renameSync(sw.path, sw.path + ".orig");
+        symlinkSync(sw.to, sw.path);
+      }
+      if (process.env.FAKE_DOWNLOAD_FAIL === "1") { process.stderr.write("Error: connection lost mid-transfer\n"); process.exit(1); }
       process.stdout.write(JSON.stringify({ transferredItems: 1, transferredBytes: 1, skippedItems: 0, failedItems: 0 }) + "\n");
       process.exit(0);
     } else {
