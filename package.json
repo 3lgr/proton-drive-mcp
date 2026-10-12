@@ -24,7 +24,8 @@
     "ci": "npm run lint && npm test",
     "pack:check": "npm pack --dry-run",
     "package:mcpb": "node scripts/build-mcpb.mjs",
-    "release:check": "npm run lint && npm test && npm run pack:check"
+    "release:check": "npm run lint && npm test && npm run pack:check",
+    "prepublishOnly": "node scripts/block-manual-publish.mjs"
   },
   "keywords": [
     "proton",
@@ -69,9 +70,6 @@
     "smithery.yaml",
     "Dockerfile"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "optionalDependencies": {
     "fflate": "0.8.3",
     "unpdf": "1.8.1"

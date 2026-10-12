@@ -1,12 +1,14 @@
 # syntax=docker/dockerfile:1
-FROM node:24-slim AS build
+# Base image pinned by digest: the multi-arch index of node:24-slim, read from the Docker Hub registry on 2026-10-11.
+# Dependabot (docker ecosystem) proposes digest updates for these FROM lines.
+FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json ./
 RUN npm ci --ignore-scripts
 COPY src ./src
 RUN npm run build
 
-FROM node:24-slim
+FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
