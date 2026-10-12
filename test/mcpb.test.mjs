@@ -12,7 +12,8 @@ const pkg = JSON.parse(read("package.json"));
 describe("mcpb manifest", () => {
   it("has required identity fields", () => {
     assert.equal(manifest.manifest_version, "0.3");
-    assert.equal(manifest.name, pkg.name);
+    assert.equal(manifest.name, "proton-drive-mcp-hardened"); // bundle names are unscoped; the npm name is @3lgr/proton-drive-mcp
+    assert.equal(pkg.name, "@3lgr/proton-drive-mcp");
     assert.equal(manifest.license, pkg.license);
     assert.equal(manifest.server.type, "node");
     assert.equal(manifest.server.entry_point, "launcher.mjs");
@@ -28,7 +29,7 @@ describe("mcpb manifest", () => {
     const refs = Object.values(env).map((v) => v.match(/^\$\{user_config\.(\w+)\}$/)?.[1]);
     assert.ok(refs.every(Boolean));
     assert.deepEqual([...refs].sort(), Object.keys(manifest.user_config).sort());
-    assert.deepEqual(Object.keys(env).sort(), ["PROTON_DRIVE_BIN", "PROTON_DRIVE_INDEX", "PROTON_DRIVE_SYNC_PATH"]);
+    assert.deepEqual(Object.keys(env).sort(), ["PROTON_DRIVE_BIN", "PROTON_DRIVE_BIN_SHA256", "PROTON_DRIVE_INDEX", "PROTON_DRIVE_SYNC_PATH"]);
     assert.ok(Object.values(manifest.user_config).every((c) => c.required === false));
   });
 

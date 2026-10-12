@@ -1,10 +1,10 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "maintainers": [
-    "googlarz"
+    "3lgr"
   ],
-  "name": "proton-drive-mcp",
-  "description": "MCP server and CLI that gives Claude full access to Proton Drive — upload, download, share, and manage your end-to-end encrypted files without leaving the conversation.",
+  "name": "proton-drive-mcp-hardened",
+  "description": "Hardened fork of proton-drive-mcp. Unofficial, not affiliated with Proton AG: an MCP server and CLI for Proton Drive and Proton Photos through the official CLI, with human-approval gates, a local path allowlist, a sharing policy and untrusted-content handling.",
   "icon": "https://proton.me/favicon.ico",
   "categories": [
     "storage",
@@ -12,7 +12,7 @@
     "privacy"
   ],
   "license": "MIT",
-  "repository": "https://github.com/googlarz/proton-drive-mcp",
+  "repository": "https://github.com/3lgr/proton-drive-mcp",
   "tools": [
     {
       "name": "drive_auth_status",

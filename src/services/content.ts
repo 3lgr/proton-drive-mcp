@@ -232,6 +232,12 @@ export async function readDriveContent(drive: DriveService, args: ReadContentArg
     throw new Error(`${showValue(path)} is a Proton Docs/Sheets document; the CLI cannot download these, so its text cannot be read.`);
   }
   const format = pickFormat(path, mediaType);
+  if ((format === "docx" || format === "pdf") && process.env["PROTON_DRIVE_ENABLE_DOC_EXTRACT"] !== "1") {
+    throw new Error(
+      `reading ${format.toUpperCase()} text is disabled by default: complex document formats are a recurring source of parser differentials. ` +
+      "The operator can enable it with PROTON_DRIVE_ENABLE_DOC_EXTRACT=1 (accepted risk; the text still arrives as untrusted data). Plain text files are not affected.",
+    );
+  }
   if (!format) throw new Error(`unsupported format for ${showValue(path)}${mediaType ? ` (${showValue(mediaType, 60, 20)})` : ""}. Supported: ${SUPPORTED}.`);
   const cap = readMaxBytes();
   // claimedSize is uploader-controlled: a lying claim only costs download bandwidth, since the
