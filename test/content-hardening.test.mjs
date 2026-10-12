@@ -122,6 +122,26 @@ describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
     await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: docx("<w:p/>") }), "/a.docx", {}, miss), /DOCX support needs the optional package fflate \(npm install fflate\)/);
   });
 
+  it("a small docx that expands ~1000:1 is refused as a decompression bomb, before inflating", async () => {
+    const xml = "<w:p><w:t>aaaaaaaaaaaaaaaa</w:t></w:p>".repeat(500_000); // ~19 MB, deflates to a few KB
+    const buf = docx(xml);
+    assert.ok(buf.length < 100_000, `compressed size ${buf.length}`);
+    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "bomb.docx", bytes: buf }), "/bomb.docx"), /decompression bomb|expands more than/);
+  });
+
+  it("a docx declaring 40000 archive entries is refused early (100000 would already exceed the 10 MB read cap)", async () => {
+    const entries = {};
+    for (let i = 0; i < 40_000; i++) entries[`junk/${i}.txt`] = new Uint8Array(0);
+    const buf = docx("<w:p><w:t>Hi</w:t></w:p>", entries);
+    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "many.docx", bytes: buf }), "/many.docx"), /more than 5000 entries/);
+  });
+
+  it("an archive whose declared sizes add up past the total ceiling is refused although only one entry is wanted", async () => {
+    const big = new Uint8Array(80 * 1024 * 1024);
+    const z = Buffer.from(fflate.zipSync({ "word/document.xml": [new TextEncoder().encode("<w:p><w:t>x</w:t></w:p>"), { level: 1 }], a: [big, { level: 1 }], b: [big, { level: 1 }], c: [big, { level: 1 }] }));
+    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "total.docx", bytes: z }), "/total.docx"), /declares more than 200 MB/);
+  });
+
   it("docx: a declared size that differs from the extracted length adds a truncation note", async () => {
     const buf = Buffer.from(docx("<w:p><w:t>x</w:t></w:p>".repeat(2000)));
     for (let i = 0; i < buf.length - 30; i++) { // lie in both headers: claim 100 bytes

@@ -193,7 +193,7 @@ async function downloadBytes(drive: DriveService, path: string, cap: number): Pr
         for (const n of readdirSync(dir)) total += lstatSync(join(dir, n)).size;
         if (total > cap) { exceeded = true; controller.abort(); }
       } catch { /* the dir is being written to; look again next tick */ }
-    }, 100);
+    }, 50);
     let r;
     try {
       r = await callContext.run({ signal: controller.signal }, () => drive.download(path, dir, "rename", "skip"));
