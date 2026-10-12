@@ -20,7 +20,6 @@ describe("gate table", () => {
     assert.equal(GATES.drive_download.strict, true);
     assert.equal(GATES.photos_download.strict, true);
     assert.equal(GATES.drive_upload.strict, false);
-    assert.equal(GATES.drive_write_file.strict, false);
     assert.equal(GATES.drive_bulk_move.strict, false);
     assert.equal(GATES.drive_bulk_trash.strict, false);
     assert.equal(GATES.photos_remove_from_album.strict, false);

@@ -53,15 +53,13 @@ export const readPids = (file) => readJsonLines(file);
 /** Base env for a server/CLI process talking to the fake binary. */
 export function fakeEnv(mode, sandbox, extra = {}) {
   const env = { ...process.env };
-  for (const k of Object.keys(env)) if (k.startsWith("FAKE_") || k === "PROTON_DRIVE_ENABLE_SYNC_WRITE" || k === "PROTON_DRIVE_SYNC_PATH" || k.startsWith("PROTON_DRIVE_INDEX") || k === "PROTON_DRIVE_LOCAL_ROOT") delete env[k];
+  for (const k of Object.keys(env)) if (k.startsWith("FAKE_") || k === "PROTON_DRIVE_SYNC_PATH" || k.startsWith("PROTON_DRIVE_INDEX") || k === "PROTON_DRIVE_LOCAL_ROOT") delete env[k];
   return {
     ...env,
     PROTON_DRIVE_BIN: FAKE_CLI,
     // Most suites exercise tool behaviour, not the consent policy: they run as an operator who opted in to
     // unattended destructive tools. Policy suites override this (extra) or run a client with elicitation.
     PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE: "1",
-    // drive_write_file is off unless enabled; suites that exercise it run as an operator who enabled it.
-    PROTON_DRIVE_ENABLE_SYNC_WRITE: "1",
     // Same for the share policy: suites about plumbing use bare calls; share-policy.test.mjs sets "strict" itself.
     PROTON_DRIVE_SHARE_POLICY: "off",
     // The CLI gets a minimal environment (F-10); the fake binary is configured through FAKE_* variables.

@@ -1218,8 +1218,8 @@ describe("validateMessage", () => {
 });
 
 // ─── syncfs utilities ─────────────────────────────────────────────────────────
-import { resolveSyncPath, readSyncFile, writeSyncFile } from "../dist/utils/syncfs.js";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { resolveSyncPath, readSyncFile } from "../dist/utils/syncfs.js";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1243,23 +1243,22 @@ describe("resolveSyncPath", () => {
   });
 });
 
-describe("readSyncFile / writeSyncFile", () => {
+describe("readSyncFile", () => {
   let tmpDir;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "syncfs-test-"));
   });
 
-  it("writes and reads back a text file", async () => {
-    await writeSyncFile(tmpDir, "/hello.txt", "hello world");
-    const content = await readSyncFile(tmpDir, "/hello.txt");
-    assert.equal(content, "hello world");
+  it("reads back a text file", async () => {
+    await writeFile(join(tmpDir, "hello.txt"), "hello world");
+    assert.equal(await readSyncFile(tmpDir, "/hello.txt"), "hello world");
   });
 
-  it("creates parent directories when writing", async () => {
-    await writeSyncFile(tmpDir, "/a/b/c.txt", "nested");
-    const content = await readSyncFile(tmpDir, "/a/b/c.txt");
-    assert.equal(content, "nested");
+  it("reads a nested file", async () => {
+    await mkdir(join(tmpDir, "a", "b"), { recursive: true });
+    await writeFile(join(tmpDir, "a", "b", "c.txt"), "nested");
+    assert.equal(await readSyncFile(tmpDir, "/a/b/c.txt"), "nested");
   });
 
   it("throws on missing file", async () => {

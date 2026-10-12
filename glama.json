@@ -95,10 +95,6 @@
       "description": "Read the text contents of a file from the local Proton Drive sync folder (requires PROTON_DRIVE_SYNC_PATH)."
     },
     {
-      "name": "drive_write_file",
-      "description": "Write text content to a file in the local Proton Drive sync folder (requires PROTON_DRIVE_SYNC_PATH)."
-    },
-    {
       "name": "drive_copy",
       "description": "Copy a file or folder to another location on Proton Drive without removing the original."
     },

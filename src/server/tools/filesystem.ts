@@ -111,7 +111,7 @@ export const FILESYSTEM_TOOLS = [
   {
       name: "drive_upload",
       description:
-        "Upload a local file or folder to Proton Drive with end-to-end encryption; folders upload recursively. Returns {uploaded, skipped, failed} counts and fails the call if failed > 0 (e.g. quota exceeded, destination not found). File and folder conflict strategies are separate (CLI v0.8.0+), both default to 'skip'. The destination folder must exist (drive_mkdir creates it). To write text directly use drive_write_file.",
+        "Upload a local file or folder to Proton Drive with end-to-end encryption; folders upload recursively. Returns {uploaded, skipped, failed} counts and fails the call if failed > 0 (e.g. quota exceeded, destination not found). File and folder conflict strategies are separate (CLI v0.8.0+), both default to 'skip'. The destination folder must exist (drive_mkdir creates it).",
       annotations: { openWorldHint: true },
       inputSchema: {
         type: "object",
@@ -375,27 +375,6 @@ export const FILESYSTEM_TOOLS = [
           },
         },
         required: ["path"],
-        additionalProperties: false,
-      },
-    },
-  {
-      name: "drive_write_file",
-      description:
-        "Write text (max 5 MB) to a plain data file (.txt .md .json .csv .tsv .yaml .yml .log .xml .html, no hidden folders) in the local Proton Drive sync folder; no Proton login needed. Disabled unless the operator sets PROTON_DRIVE_ENABLE_SYNC_WRITE=1. Requires PROTON_DRIVE_SYNC_PATH; the desktop app must be running to sync it to the cloud. Creates parent directories locally. Refuses to overwrite an existing file unless confirmed=true — ask the user first. For binary content use drive_upload.",
-      annotations: { destructiveHint: true, openWorldHint: true },
-      inputSchema: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: "Absolute remote Drive path of the file to write (must start with '/'). /my-files/<rest> maps to <PROTON_DRIVE_SYNC_PATH>/<rest>; only /my-files is synced, other Drive roots are rejected. A path not starting with a Drive root is taken relative to the sync folder. E.g. /my-files/notes.txt",
-          },
-          content: {
-            type: "string",
-            description: "UTF-8 text content to write. The file will be created or overwritten.",
-          },
-        },
-        required: ["path", "content"],
         additionalProperties: false,
       },
     },

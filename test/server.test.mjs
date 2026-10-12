@@ -46,7 +46,7 @@ describe("initialize and tools/list", () => {
   let tools;
   before(async () => { tools = await s.c.listTools(); });
 
-  it("advertises exactly 47 tools", () => assert.equal(tools.length, 47));
+  it("advertises exactly 46 tools", () => assert.equal(tools.length, 46));
 
   it("has unique tool names", () => {
     assert.equal(new Set(tools.map((t) => t.name)).size, tools.length);
@@ -68,7 +68,7 @@ describe("initialize and tools/list", () => {
   });
 
   it("advertises a boolean `confirmed` property on every gated tool", () => {
-    const gated = [...Object.keys(GATED_ALWAYS), "drive_upload", "drive_download", "photos_download", "drive_write_file"];
+    const gated = [...Object.keys(GATED_ALWAYS), "drive_upload", "drive_download", "photos_download"];
     for (const name of gated) {
       const t = tools.find((x) => x.name === name);
       assert.ok(t, `${name} missing`);
@@ -198,40 +198,6 @@ describe("conditional confirmed gates", () => {
   for (const strat of ["skip", "rename"]) {
     it(`photos_download conflictStrategy=${strat} needs no confirmation`, () => allowed("photos_download", { ...photoDown, conflictStrategy: strat }));
   }
-});
-
-describe("drive_write_file overwrite gate", () => {
-  let sync, sb, c;
-  before(async () => {
-    sync = mkdtempSync(join(tmpdir(), "pdmcp-sync-"));
-    writeFileSync(join(sync, "existing.txt"), "old");
-    sb = makeSandbox();
-    c = await startServer("json", sb, { PROTON_DRIVE_SYNC_PATH: sync });
-  });
-  after(async () => { await c?.close(); sb?.cleanup(); if (sync) rmSync(sync, { recursive: true, force: true }); });
-
-  it("refuses to overwrite an existing file without confirmed and leaves it untouched", async () => {
-    const r = await c.call("drive_write_file", { path: "/existing.txt", content: "new" });
-    assert.equal(r.isError, true);
-    assert.match(r.text, /confirmed=true/);
-    assert.equal(readFileSync(join(sync, "existing.txt"), "utf8"), "old");
-  });
-
-  it("overwrites an existing file with confirmed:true", async () => {
-    const r = await c.call("drive_write_file", { path: "/existing.txt", content: "new", confirmed: true });
-    assert.equal(r.isError, false, r.text);
-    assert.equal(readFileSync(join(sync, "existing.txt"), "utf8"), "new");
-  });
-
-  it("creates a new file without confirmation", async () => {
-    const r = await c.call("drive_write_file", { path: "/fresh.txt", content: "hello" });
-    assert.equal(r.isError, false, r.text);
-    assert.ok(existsSync(join(sync, "fresh.txt")));
-  });
-
-  it("never calls the CLI (local operation)", () => {
-    assert.equal(nonVersionCalls(sb.argvLog).length, 0);
-  });
 });
 
 describe("protocol errors and argument validation", () => {
@@ -593,7 +559,7 @@ describe("CLI output handling and error sanitization", () => {
       const r = await c.call("drive_list", { path: "/my-files" });
       assert.equal(r.isError, true);
       assert.match(r.text, /not found/i);
-      assert.equal((await c.listTools()).length, 47);
+      assert.equal((await c.listTools()).length, 46);
     } finally { await c.close(); sb.cleanup(); }
   });
 });

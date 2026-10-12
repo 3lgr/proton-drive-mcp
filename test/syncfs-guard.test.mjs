@@ -7,8 +7,6 @@ import { join, delimiter, dirname } from "node:path";
 import {
   resolveSyncPath,
   readSyncFile,
-  writeSyncFile,
-  syncFileExists,
 } from "../dist/utils/syncfs.js";
 import { assertLocalPathAllowed } from "../dist/utils/localguard.js";
 
@@ -44,28 +42,9 @@ describe("syncfs hardening", () => {
     await assert.rejects(() => readSyncFile(root, "/dangling"), /outside sync root/);
   });
 
-  it("write through escaping dir symlink is rejected and nothing is written", async () => {
-    await assert.rejects(() => writeSyncFile(root, "/escape-dir/pwn.txt", "x"), /outside sync root/);
-    await assert.rejects(() => stat(join(outside, "pwn.txt")), /ENOENT/);
-  });
-
-  it("mkdir through escaping symlink does not create dirs outside", async () => {
-    await assert.rejects(() => writeSyncFile(root, "/escape-dir/newdir/f.txt", "x"), /outside sync root/);
-    await assert.rejects(() => stat(join(outside, "newdir")), /ENOENT/);
-  });
-
-  it("write onto an existing symlink is refused (in-root and escaping)", async () => {
-    await assert.rejects(() => writeSyncFile(root, "/escape-file.txt", "x"), /outside sync root|symlink/);
-    assert.equal(await readFile(join(outside, "secret.txt"), "utf8"), "TOPSECRET");
-    await assert.rejects(() => writeSyncFile(root, "/inner-file.txt", "x"), /symlink/);
-    assert.equal(await readFile(join(root, "real", "ok.txt"), "utf8"), "fine");
-  });
-
-  it("in-root symlinked directory that stays inside works for read and write", async () => {
+  it("in-root symlinked directory that stays inside works for read", async () => {
     assert.equal(await readSyncFile(root, "/inner-dir/ok.txt"), "fine");
     assert.equal(await readSyncFile(root, "/inner-file.txt"), "fine");
-    await writeSyncFile(root, "/inner-dir/new.txt", "hello");
-    assert.equal(await readFile(join(root, "real", "new.txt"), "utf8"), "hello");
   });
 
   it("sync root that is itself a symlink works", async () => {
@@ -77,7 +56,6 @@ describe("syncfs hardening", () => {
 
   it("lexical traversal is still rejected", async () => {
     await assert.rejects(() => readSyncFile(root, "/../outside/secret.txt"), /outside sync root/);
-    await assert.rejects(() => writeSyncFile(root, "/../outside/x.txt", "x"), /outside sync root/);
   });
 
   it("root '/' edge: resolveSyncPath does not reject valid or traversal-to-root paths", () => {
@@ -106,33 +84,6 @@ describe("syncfs hardening", () => {
     await assert.rejects(() => readSyncFile(root, "/real"), /regular file|EISDIR/);
   });
 
-  it("write cap: 5MB ok, above rejected", async () => {
-    await writeSyncFile(root, "/w-ok.txt", "a".repeat(5 * 1024 * 1024));
-    assert.equal((await stat(join(root, "w-ok.txt"))).size, 5 * 1024 * 1024);
-    await assert.rejects(
-      () => writeSyncFile(root, "/w-big.txt", "a".repeat(5 * 1024 * 1024 + 1)),
-      /too large to write \(limit 5 MB\)/
-    );
-    await assert.rejects(() => stat(join(root, "w-big.txt")), /ENOENT/);
-  });
-
-  it("write overwrites existing regular file and creates nested dirs", async () => {
-    await writeSyncFile(root, "/ow.txt", "one");
-    await writeSyncFile(root, "/ow.txt", "two");
-    assert.equal(await readSyncFile(root, "/ow.txt"), "two");
-    await writeSyncFile(root, "/n/e/s/t.txt", "deep");
-    assert.equal(await readSyncFile(root, "/n/e/s/t.txt"), "deep");
-  });
-
-  it("syncFileExists", async () => {
-    assert.equal(await syncFileExists(root, "/real/ok.txt"), true);
-    assert.equal(await syncFileExists(root, "/real/missing.txt"), false);
-    assert.equal(await syncFileExists(root, "/no/such/dir/x"), false);
-    assert.equal(await syncFileExists(root, "/inner-file.txt"), true);
-    await assert.rejects(() => syncFileExists(root, "/escape-file.txt"), /outside sync root/);
-    await assert.rejects(() => syncFileExists(root, "/escape-dir/secret.txt"), /outside sync root/);
-    await assert.rejects(() => syncFileExists(root, "/../outside/secret.txt"), /outside sync root/);
-  });
 });
 
 describe("assertLocalPathAllowed", () => {

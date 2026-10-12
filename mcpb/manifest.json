@@ -50,7 +50,7 @@
     "sync_path": {
       "type": "directory",
       "title": "Proton Drive sync folder",
-      "description": "Optional. Root of your locally synced Proton Drive folder; enables drive_read_file and drive_write_file.",
+      "description": "Optional. Root of your locally synced Proton Drive folder; enables drive_read_file.",
       "required": false
     },
     "persistent_index": {
@@ -239,10 +239,6 @@
     {
       "name": "drive_read_file",
       "description": "Read the text contents of a file from the local Proton Drive sync folder."
-    },
-    {
-      "name": "drive_write_file",
-      "description": "Write text content to a file in the local Proton Drive sync folder (no Proton login needed — this only touches the local synced folder)."
     },
     {
       "name": "drive_usage",

@@ -33,7 +33,6 @@ tools:
   - drive_empty_trash
   - drive_read_file
   - drive_read_content
-  - drive_write_file
   - drive_copy
   - drive_list_invitations
   - drive_invitation_accept
@@ -66,7 +65,7 @@ startCommand:
     properties:
       PROTON_DRIVE_SYNC_PATH:
         type: string
-        description: "Absolute path to the root of your local Proton Drive sync folder. Required only for drive_read_file and drive_write_file. Example: /Users/you/Proton Drive"
+        description: "Absolute path to the root of your local Proton Drive sync folder. Required only for drive_read_file. Example: /Users/you/Proton Drive"
   commandFunction: |-
     (config) => ({
       // Pinned to a release tag on purpose: never run a floating version of a program that holds your session.

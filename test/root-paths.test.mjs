@@ -83,14 +83,6 @@ describe("write tools refuse roots before spawning the CLI", () => {
   it("photos album tools keep their /albums/<name> requirement", async () => {
     await refused("photos_delete_album", { albumPath: "/albums", confirmed: true });
   });
-  it("drive_write_file on the root", async () => {
-    const sb = makeSandbox();
-    const c = await startServer("json", sb, { PROTON_DRIVE_SYNC_PATH: sb.dir });
-    try {
-      const r = await c.call("drive_write_file", { path: "/my-files", content: "x" });
-      assert.equal(r.isError, true);
-    } finally { await c.close(); sb.cleanup(); }
-  });
 });
 
 describe("normal paths still work", () => {

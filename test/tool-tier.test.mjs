@@ -9,7 +9,7 @@ const CORE = [
   "drive_mkdir", "drive_upload", "drive_download", "drive_rename", "drive_move", "drive_copy",
   "drive_trash", "drive_restore", "drive_share_status", "photos_list_timeline", "photos_download",
 ];
-const FULL_ONLY = ["drive_delete", "drive_empty_trash", "drive_auth_logout", "drive_share_set_url", "drive_share_invite", "photos_delete_album", "drive_write_file"];
+const FULL_ONLY = ["drive_delete", "drive_empty_trash", "drive_auth_logout", "drive_share_set_url", "drive_share_invite", "photos_delete_album"];
 const size = (tools) => Buffer.byteLength(JSON.stringify({ tools }));
 
 async function withServer(env, fn) {
@@ -25,7 +25,7 @@ describe("tool tier", () => {
     core = await withServer({ PROTON_DRIVE_TOOL_TIER: "core" }, (c) => c.listTools());
   });
 
-  it("default lists all 47 tools", () => assert.equal(full.length, 47));
+  it("default lists all 46 tools", () => assert.equal(full.length, 46));
 
   it("core lists exactly the curated set, all present in full", () => {
     assert.deepEqual(core.map((t) => t.name).sort(), [...CORE].sort());
@@ -45,8 +45,7 @@ describe("tool tier", () => {
   // +100 each in 1.4.0: one sentence in drive_search explaining stale:true (persistent index).
   // drive_read_content (+~800 bytes, also in core).
   // +~600 in 2.0.0: drive_invitation_accept is now gated (confirmed property + description).
-  // +~200 in 2.0.1: photos_add_to_album is gated (confirmed property + description); upload/write_file say "or the destination is shared".
-  // +~120 more in 2.0.1: drive_write_file says it is off by default and which formats it writes.
+  // -drive_write_file in 2.0.1; +~150 for the gated photos_add_to_album and the "or the destination is shared" wording.
   it("tools/list stays within the size budget", () => {
     assert.ok(size(full) <= 41_500, `full ${size(full)} bytes`);
     assert.ok(size(core) <= 18_800, `core ${size(core)} bytes`);
@@ -84,7 +83,7 @@ describe("tool tier", () => {
     sb.cleanup();
     const lines = out.split("\n").filter(Boolean).map((l) => JSON.parse(l)); // throws on any non-JSON line
     assert.ok(lines.every((m) => m.jsonrpc === "2.0"));
-    assert.equal(lines.find((m) => m.id === 2).result.tools.length, 47);
+    assert.equal(lines.find((m) => m.id === 2).result.tools.length, 46);
     assert.equal((err.match(/PROTON_DRIVE_TOOL_TIER/g) ?? []).length, 1);
   });
 });
