@@ -1,7 +1,7 @@
 # proton-drive-mcp (hardened fork)
 
 [![CI](https://github.com/3lgr/proton-drive-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/3lgr/proton-drive-mcp/actions/workflows/ci.yml)
-[![License: MIT](LICENSE)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
 
