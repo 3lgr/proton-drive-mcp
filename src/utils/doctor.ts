@@ -99,7 +99,7 @@ async function entryPinCheck(id: string, cliPath: string, entry: EntryEnv): Prom
   catch { return { id, status: "fail", message: `${target} could not be read to verify the pin in the Claude Desktop entry`, hint: REPIN_HINT }; }
   return got === want
     ? { id, status: "ok", message: `sha256 of ${target} matches ${HASH_ENV} in the Claude Desktop entry` }
-    : { id, status: "fail", message: `sha256 of ${target} does not match ${HASH_ENV} in the Claude Desktop entry (got ${got.slice(0, 12)}…); the server would refuse to run it`, hint: REPIN_HINT };
+    : { id, status: "fail", message: `sha256 of ${target} does not match ${HASH_ENV} in the Claude Desktop entry (pinned ${want.slice(0, 12)}…, binary ${got.slice(0, 12)}…); the server would refuse to run it`, hint: REPIN_HINT };
 }
 
 async function integrityChecks(cliPath: string, entry?: EntryEnv): Promise<Check[]> {
@@ -115,6 +115,9 @@ async function integrityChecks(cliPath: string, entry?: EntryEnv): Promise<Check
       out.push({ id: "cli-integrity", status: "ok", message: `sha256 matches ${HASH_ENV}` });
     } catch (e) {
       out.push({ id: "cli-integrity", status: "fail", message: e instanceof Error ? e.message : String(e), hint: "Reinstall the official CLI, or update the pinned hash if you upgraded it on purpose." });
+    }
+    if (entry && !entryPinned) {
+      out.push({ id: "cli-integrity-entry", status: "warn", message: `the Claude Desktop entry has no ${HASH_ENV}: the server Claude Desktop starts runs the binary unpinned (only your shell is pinned)`, hint: "Run `proton-drive-cli setup-claude-desktop --write --pin`." });
     }
   } else if (!entryPinned) {
     out.push({ id: "cli-integrity", status: "warn", message: `the binary is not pinned (${cliPath})`, hint: `Set ${HASH_ENV} to its sha256 (shasum -a 256 <path>) so a replaced binary is refused.` });

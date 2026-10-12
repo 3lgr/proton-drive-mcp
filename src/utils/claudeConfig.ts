@@ -64,11 +64,18 @@ export function isEphemeralInstall(p: string): boolean {
   return /[\\/]_npx[\\/]/.test(p);
 }
 
+/** True when group or others can write to the path (POSIX); always false on Windows, where modes mean nothing. */
+function writableByOthers(p: string): boolean {
+  if (process.platform === "win32") return false;
+  return (statSync(p).mode & 0o022) !== 0;
+}
+
 /**
  * A `node` on PATH that is the same file as the running one, as an absolute path that survives upgrades
  * (/opt/homebrew/bin/node rather than /opt/homebrew/Cellar/node/<version>/bin/node). Same file means equal
  * realpath, so this never selects a different install. Relative and empty PATH entries are skipped (they depend on
- * the cwd). Falls back to process.execPath.
+ * the cwd), as is a directory or binary that group/others can write to. No variable other than PATH is consulted.
+ * Any doubt falls back to process.execPath.
  */
 export function stableNodePath(execPath: string = process.execPath, pathVar: string = process.env["PATH"] ?? ""): string {
   let real: string;
@@ -77,19 +84,34 @@ export function stableNodePath(execPath: string = process.execPath, pathVar: str
   for (const dir of pathVar.split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue;
     const candidate = join(dir, name);
-    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real) return candidate; } catch { /* dangling link: next */ }
+    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real && !writableByOthers(dir) && !writableByOthers(real)) return candidate; } catch { /* dangling link: next */ }
   }
   return execPath;
 }
 
-export function buildEntry(cliPath: string, syncPath?: string, binSha256?: string): McpEntry {
+/** The env of our existing entry (string values only), or undefined when the file or entry is missing or unreadable. */
+export function readEntryEnv(file: string): Record<string, string> | undefined {
+  try {
+    const servers = (JSON.parse(readFileSync(file, "utf8")) as { mcpServers?: Record<string, { env?: Record<string, unknown> }> }).mcpServers;
+    const env = servers?.[SERVER_KEY]?.env;
+    if (!env || typeof env !== "object") return undefined;
+    return Object.fromEntries(Object.entries(env).filter((kv): kv is [string, string] => typeof kv[1] === "string"));
+  } catch { return undefined; }
+}
+
+export function buildEntry(cliPath: string, syncPath?: string, binSha256?: string, preservedEnv: Readonly<Record<string, string>> = {}): McpEntry {
   const entryPath = serverEntryPath();
   if (isEphemeralInstall(entryPath)) {
     throw new Error(`${entryPath} is in a temporary npx cache and would stop working once the cache is pruned. Install it first (see "Install" in the README: npm install -g github:3lgr/proton-drive-mcp#<tag>) and run proton-drive-cli from there.`);
   }
+  // Re-running setup never drops what the user configured: existing variables (pin, policy, local root...) are kept.
+  // Only the values this run is asked to set replace theirs.
   const env: Record<string, string> = { PROTON_DRIVE_BIN: cliPath };
-  if (binSha256) env["PROTON_DRIVE_BIN_SHA256"] = binSha256;
-  if (syncPath) env["PROTON_DRIVE_SYNC_PATH"] = syncPath;
+  const sha = binSha256 ?? preservedEnv["PROTON_DRIVE_BIN_SHA256"];
+  if (sha !== undefined) env["PROTON_DRIVE_BIN_SHA256"] = sha;
+  const sync = syncPath ?? preservedEnv["PROTON_DRIVE_SYNC_PATH"];
+  if (sync !== undefined) env["PROTON_DRIVE_SYNC_PATH"] = sync;
+  for (const [k, v] of Object.entries(preservedEnv)) if (!(k in env)) env[k] = v;
   return { command: stableNodePath(), args: [entryPath], env };
 }
 
