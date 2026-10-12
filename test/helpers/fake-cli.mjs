@@ -5,7 +5,7 @@
 //   FAKE_ARGV_LOG     file that receives one JSON line per invocation: {argv, pid}
 //   FAKE_MODE         json | shuffle | empty | undefined-literal | garbage | ansi-prefixed-json |
 //                     fail-stderr | fail-stderr-echo | fail-stdout-crash | hang |
-//                     big-stderr | auth-fail | ok-false-results | locked-then-json | transient-then-json | tree | download-hang
+//                     flood (FAKE_FLOOD_MB of stdout) | big-stderr | auth-fail | ok-false-results | locked-then-json | transient-then-json | tree | download-hang
 //                     download-hang: `filesystem info` prints a small text file node; `filesystem download` writes a partial file into the
 //                     target dir, then hangs like `hang`. Everything else prints "[]".
 //   FAKE_TREE         tree mode: path to a JSON file {"<folder path>": [list items]}; `filesystem list <path>` serves that entry
@@ -145,6 +145,16 @@ switch (mode) {
   case "hang":
     hang();
     break;
+  case "flood": { // FAKE_FLOOD_MB (default 51) of stdout, then exit 0: past the 50 MB buffer cap
+    const chunk = "x".repeat(1024 * 1024);
+    let left = Number(process.env.FAKE_FLOOD_MB ?? 51);
+    const pump = () => {
+      while (left > 0) { left--; if (!process.stdout.write(chunk)) return process.stdout.once("drain", pump); }
+      process.exit(0);
+    };
+    pump();
+    break;
+  }
   case "big-stderr": {
     let s = "";
     for (let i = 0; i < 3000; i++) s += `line ${i} ${"x".repeat(1000)}\n`;
