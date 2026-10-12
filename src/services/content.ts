@@ -1,13 +1,14 @@
 import { mkdtemp, readdir, readFile, lstat, rm } from "node:fs/promises";
+import { readdirSync, lstatSync } from "node:fs";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { DriveService } from "./drive.js";
 import { validateLocalPath } from "../utils/validation.js";
-import { callContext } from "../utils/subprocess.js";
+import { callContext, trackChild } from "../utils/subprocess.js";
 import { retryOnLocked } from "../utils/lockRetry.js";
 import { showValue } from "../utils/text.js";
-import { Worker } from "node:worker_threads";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export { docxXmlToText } from "./contentExtract.js";
@@ -34,10 +35,10 @@ export interface ReadContentResult {
   truncated: boolean; nextOffset?: number; note?: string;
 }
 export interface ReadContentDeps {
-  /** Overrides for the PDF/DOCX worker (tests): limits, text cap, package specifiers, a hook receiving the Worker. */
+  /** Overrides for the PDF/DOCX parser process (tests): limits, text cap, package specifiers, a hook receiving the Worker. */
   worker?: {
     maxOldGenerationSizeMb?: number; timeoutMs?: number; maxTextChars?: number;
-    moduleSpecifiers?: Record<string, string>; onWorker?: (w: Worker) => void;
+    moduleSpecifiers?: Record<string, string>; onWorker?: (w: ChildProcess) => void;
   };
 }
 
@@ -79,37 +80,79 @@ export function readTimeoutMs(): number {
 
 interface Extracted { text: string; note?: string; capped: boolean }
 
+const MAX_CHILD_STDOUT = 24 * 1024 * 1024;
+
+/** `--permission` (Node >= 23.5) or `--experimental-permission` (Node 22). */
+function permissionFlag(): string {
+  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+  return major > 23 || (major === 23 && minor >= 5) ? "--permission" : "--experimental-permission";
+}
+
+/** Directories the parser may READ: this package and every node_modules above it (where fflate/unpdf live). */
+function readRoots(): string[] {
+  const entry = fileURLToPath(new URL("./contentChild.js", import.meta.url));
+  const packageRoot = dirname(dirname(dirname(entry))); // <root>/dist/services/contentChild.js
+  const roots = new Set<string>([packageRoot]);
+  let dir = packageRoot;
+  for (;;) {
+    if (basename(dir) === "node_modules") roots.add(dir);
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return [...roots];
+}
+
 /**
- * Parses in a worker thread with a memory cap, a hard timeout and the request's abort signal, so a hostile
- * PDF/DOCX can take down only the worker. The bytes are copied and transferred; the worker needs no file access.
+ * Parses in a SEPARATE PROCESS: Node permission model (no fs write, no child processes, no workers, no addons, reads
+ * limited to the package and node_modules), empty environment, heap cap, hard timeout, output cap, and the request's
+ * abort signal. worker_threads would share the server's address space and file access: it is not a sandbox.
  */
-async function extractInWorker(format: "pdf" | "docx", buf: Buffer, opts: NonNullable<ReadContentDeps["worker"]>): Promise<Extracted> {
+async function extractInChild(format: "pdf" | "docx", buf: Buffer, opts: NonNullable<ReadContentDeps["worker"]>): Promise<Extracted> {
   const tooBig = new Error(`${format.toUpperCase()} is too large or complex to read safely`);
   const signal = callContext.getStore()?.signal;
   if (signal?.aborted) throw new Error("cancelled");
-  const bytes = new Uint8Array(buf.length); // not buf.buffer: small Buffers share a pooled ArrayBuffer
-  bytes.set(buf);
-  const w = new Worker(fileURLToPath(new URL("./contentWorker.js", import.meta.url)), {
-    workerData: { kind: format, bytes, maxChars: opts.maxTextChars ?? MAX_EXTRACT_CHARS, moduleSpecifiers: opts.moduleSpecifiers },
-    transferList: [bytes.buffer],
-    resourceLimits: { maxOldGenerationSizeMb: opts.maxOldGenerationSizeMb ?? 512, maxYoungGenerationSizeMb: 32 },
-  });
-  opts.onWorker?.(w);
+  const script = fileURLToPath(new URL("./contentChild.js", import.meta.url));
+  const args = [
+    permissionFlag(), ...readRoots().map((r) => `--allow-fs-read=${r}`),
+    `--max-old-space-size=${opts.maxOldGenerationSizeMb ?? 512}`, script,
+  ];
+  const child = spawn(process.execPath, args, { stdio: ["pipe", "pipe", "ignore"], env: {}, windowsHide: true });
+  const forget = trackChild(child);
+  opts.onWorker?.(child);
+  const header = JSON.stringify({ kind: format, maxChars: opts.maxTextChars ?? MAX_EXTRACT_CHARS, moduleSpecifiers: opts.moduleSpecifiers });
   let onAbort: (() => void) | undefined;
   let timer: NodeJS.Timeout | undefined;
+  const kill = (): void => { try { child.kill("SIGKILL"); } catch { /* already gone */ } };
   try {
     return await new Promise<Extracted>((resolve, reject) => {
-      timer = setTimeout(() => reject(tooBig), opts.timeoutMs ?? readTimeoutMs());
-      onAbort = () => reject(new Error("cancelled"));
+      timer = setTimeout(() => { kill(); reject(tooBig); }, opts.timeoutMs ?? readTimeoutMs());
+      onAbort = () => { kill(); reject(new Error("cancelled")); };
       signal?.addEventListener("abort", onAbort, { once: true });
-      w.once("message", (m: { ok: boolean; error?: string } & Extracted) => (m.ok ? resolve(m) : reject(new Error(m.error ?? "read failed"))));
-      w.once("error", () => reject(tooBig)); // ERR_WORKER_OUT_OF_MEMORY or a crash inside the parser
-      w.once("exit", () => reject(tooBig)); // no-op once settled
+      const out: Buffer[] = [];
+      let size = 0;
+      child.stdout!.on("data", (d: Buffer) => {
+        size += d.length;
+        if (size > MAX_CHILD_STDOUT) { kill(); reject(tooBig); return; }
+        out.push(d);
+      });
+      child.once("error", () => reject(tooBig));
+      child.stdin!.on("error", () => { /* the child may exit before reading everything */ });
+      child.once("close", () => {
+        try {
+          const m = JSON.parse(Buffer.concat(out).toString("utf8")) as { ok: boolean; error?: string } & Extracted;
+          if (m.ok) resolve(m); else reject(new Error(m.error ?? "read failed"));
+        } catch {
+          reject(tooBig); // killed (out of memory, crash, timeout) or no answer
+        }
+      });
+      child.stdin!.end(Buffer.concat([Buffer.from(`${header}\n`), buf]));
     });
   } finally {
     clearTimeout(timer);
     if (onAbort) signal?.removeEventListener("abort", onAbort);
-    await w.terminate();
+    kill();
+    forget();
   }
 }
 
@@ -129,15 +172,39 @@ export function sliceCodePoints(s: string, offset: number, max: number): { text:
   return { text: s.slice(startIdx, endIdx), total: cp, end: endCp < 0 ? cp : endCp };
 }
 
-/** Downloads into a private temp dir; the dir is always removed, also on abort or error. */
+/**
+ * Downloads into a private temp dir; the dir is always removed, also on abort or error. The size cap is enforced
+ * WHILE downloading (the declared size is uploader-controlled): the directory is polled and the CLI is killed the
+ * moment more than `cap` bytes are on disk, so a lying file can not fill the disk before the post-check.
+ */
 async function downloadBytes(drive: DriveService, path: string, cap: number): Promise<Buffer> {
   const dir = await mkdtemp(join(tmpdir(), "pdmcp-read-"));
   registerTempDir(dir);
   try {
     validateLocalPath(dir);
-    const signal = callContext.getStore()?.signal;
-    const r = await drive.download(path, dir, "rename", "skip");
-    if (signal?.aborted) throw new Error("cancelled");
+    const outer = callContext.getStore()?.signal;
+    const controller = new AbortController();
+    const relay = (): void => controller.abort();
+    outer?.addEventListener("abort", relay, { once: true });
+    let exceeded = false;
+    const watcher = setInterval(() => {
+      try {
+        let total = 0;
+        for (const n of readdirSync(dir)) total += lstatSync(join(dir, n)).size;
+        if (total > cap) { exceeded = true; controller.abort(); }
+      } catch { /* the dir is being written to; look again next tick */ }
+    }, 100);
+    let r;
+    try {
+      r = await callContext.run({ signal: controller.signal }, () => drive.download(path, dir, "rename", "skip"));
+    } catch (e) {
+      if (exceeded) throw new Error(`the download passed the read cap of ${cap} bytes and was stopped`);
+      throw e;
+    } finally {
+      clearInterval(watcher);
+      outer?.removeEventListener("abort", relay);
+    }
+    if (outer?.aborted) throw new Error("cancelled");
     if (r.failed > 0 || r.downloaded < 1) throw new Error("download failed");
     const names = await readdir(dir);
     if (names.length !== 1) throw new Error("unexpected download result");
@@ -180,7 +247,7 @@ export async function readDriveContent(drive: DriveService, args: ReadContentArg
   let capped = false;
   if (format === "text") text = decodeUtf8(buf);
   else {
-    ({ text, note, capped } = await extractInWorker(format, buf, deps.worker ?? {}));
+    ({ text, note, capped } = await extractInChild(format, buf, deps.worker ?? {}));
     if (capped) note = [note, `text capped at ${deps.worker?.maxTextChars ?? MAX_EXTRACT_CHARS} characters; the rest of the file was not read`].filter(Boolean).join("; ");
   }
   text = text.replaceAll("\0", "");
