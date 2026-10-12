@@ -1,12 +1,17 @@
-// S-01: the server runs a closed binary with the user's authenticated session. Resolve it once to an absolute
-// path, optionally pin it by SHA-256 (PROTON_DRIVE_BIN_SHA256), and tell `doctor` when it comes from places other
-// people can write to. The hash is checked right before each spawn (re-read when the file's identity changes);
-// a swap between the check and exec by someone who can already write the file's directory is the residual risk.
+// S-01: the server runs a closed binary with the user's authenticated session.
+// Without a pin it runs the binary by resolved absolute path. With PROTON_DRIVE_BIN_SHA256 set, the verified bytes
+// themselves are what runs: the binary is copied into a private 0700 directory (created O_EXCL), the hash is taken
+// of THE COPY, the copy is made read-only (0500) and only the copy is ever executed. There is no window between
+// "checked" and "executed" on a path someone else can write, and no verification cache keyed on file attributes.
+// If the copy cannot be made or does not match, nothing runs (fail closed).
 import { createHash } from "node:crypto";
-import { createReadStream, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { chmodSync, createReadStream, createWriteStream, lstatSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { resolveBinary } from "./claudeConfig.js";
 import { DriveCliError } from "./errors.js";
+import { registerTempDir, unregisterTempDir } from "./tempDirs.js";
 
 export const BIN_ENV = "PROTON_DRIVE_BIN";
 export const HASH_ENV = "PROTON_DRIVE_BIN_SHA256";
@@ -35,30 +40,61 @@ function hashFile(path: string): Promise<string> {
   });
 }
 
-let verified: { sig: string; ok: boolean } | undefined;
-const signature = (path: string): string => {
-  const st = statSync(path);
-  return `${path}|${st.dev}|${st.ino}|${st.size}|${st.mtimeMs}|${expectedSha256()}`;
-};
+interface PrivateCopy { readonly dir: string; readonly path: string; readonly dev: number; readonly ino: number; readonly size: number; readonly mtimeMs: number }
+let copying: Promise<PrivateCopy> | undefined;
+let hooked = false;
 
-/** Returns the path to spawn. With a pin set, hashes the file first and throws on any mismatch or read error. */
-export async function trustedBinary(): Promise<string> {
-  const path = binaryPath();
-  const want = expectedSha256();
-  if (!want) return path;
-  let sig: string;
-  try { sig = signature(path); }
-  catch { throw new DriveCliError(`${HASH_ENV} is set but the binary cannot be inspected: ${path}`); }
-  if (verified?.sig === sig) {
-    if (verified.ok) return path;
-    throw new DriveCliError(`the proton-drive binary does not match ${HASH_ENV}; refusing to run it`);
+function cleanupCopy(): void {
+  // sync on purpose: runs from process 'exit'
+  if (!copying) return;
+  copying.then((c) => rmSync(c.dir, { recursive: true, force: true }), () => undefined);
+}
+
+async function makeVerifiedCopy(source: string, want: string): Promise<PrivateCopy> {
+  const dir = mkdtempSync(join(tmpdir(), "pdmcp-bin-")); // mode 0700
+  registerTempDir(dir);
+  const fail = (msg: string): never => { rmSync(dir, { recursive: true, force: true }); unregisterTempDir(dir); throw new DriveCliError(msg); };
+  const dest = join(dir, "proton-drive");
+  try {
+    await pipeline(createReadStream(source), createWriteStream(dest, { flags: "wx", mode: 0o700 }));
+  } catch {
+    return fail(`${HASH_ENV} is set but the binary at ${source} could not be copied for verification; refusing to run it`);
   }
   let got: string;
-  try { got = await hashFile(path); }
-  catch { throw new DriveCliError(`${HASH_ENV} is set but the binary cannot be read: ${path}`); }
-  verified = { sig, ok: got === want };
-  if (!verified.ok) throw new DriveCliError(`the proton-drive binary at ${path} does not match ${HASH_ENV} (got ${got.slice(0, 12)}…); refusing to run it`);
-  return path;
+  try { got = await hashFile(dest); } catch { return fail("the verified copy of the proton-drive binary could not be read; refusing to run it"); }
+  if (got !== want) return fail(`the proton-drive binary at ${source} does not match ${HASH_ENV} (got ${got.slice(0, 12)}…); refusing to run it`);
+  chmodSync(dest, 0o500);
+  const st = lstatSync(dest);
+  if (!st.isFile() || (st.mode & 0o777) !== 0o500) return fail("the verified copy of the proton-drive binary has unexpected attributes; refusing to run it");
+  return { dir, path: dest, dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+}
+
+/** Path to execute. With a pin: the private verified copy (created on first use). Never the original afterwards. */
+export async function trustedBinary(): Promise<string> {
+  const want = expectedSha256();
+  if (!want) return binaryPath();
+  if (!hooked) { hooked = true; process.once("exit", cleanupCopy); }
+  const source = binaryPath();
+  if (!copying) {
+    copying = makeVerifiedCopy(source, want);
+    copying.catch(() => { copying = undefined; }); // a failure is never remembered as "verified"; the next call tries again
+  }
+  const c = await copying;
+  // Tripwire on OUR copy (not a cache of the original): same inode, size, mtime and still 0500.
+  let st;
+  try { st = lstatSync(c.path); } catch { copying = undefined; throw new DriveCliError("the verified copy of the proton-drive binary disappeared; refusing to run"); }
+  if (!st.isFile() || st.dev !== c.dev || st.ino !== c.ino || st.size !== c.size || st.mtimeMs !== c.mtimeMs || (st.mode & 0o777) !== 0o500) {
+    copying = undefined;
+    throw new DriveCliError("the verified copy of the proton-drive binary was modified; refusing to run it");
+  }
+  if (await hashFile(c.path) !== want) { copying = undefined; throw new DriveCliError("the verified copy of the proton-drive binary no longer matches the pin; refusing to run it"); }
+  return c.path;
+}
+
+/** Test seam: forget the private copy (and remove it). */
+export function resetBinaryStateForTests(): void {
+  cleanupCopy();
+  copying = undefined;
 }
 
 export interface BinaryRisk { id: string; message: string }
