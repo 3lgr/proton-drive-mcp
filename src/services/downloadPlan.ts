@@ -59,16 +59,23 @@ function freeName(parentRel: string, name: string, lookup: Lookup): string {
 
 const foldKey = (n: string): string => n.normalize("NFC").toLowerCase();
 
+// Folders whose contents configure or authenticate something local: nested anywhere, they are refused.
+const SENSITIVE_DIRS = new Set([".ssh", ".gnupg", ".aws", ".kube", ".docker", ".azure", ".password-store"]);
+const SENSITIVE_UNDER_GIT = new Set(["hooks", "config"]); // .git/hooks/* run commands, .git/config can set fsmonitor/pager/aliases
+
 /** Every node below (and including) `node` must be a plain file or folder with a safe, non-colliding name. */
-function assertTreeAcceptable(node: StagedNode, top: boolean): asserts node is StagedNode & { kind: "file" | "dir" } {
+function assertTreeAcceptable(node: StagedNode, top: boolean, parent = ""): asserts node is StagedNode & { kind: "file" | "dir" } {
   if (node.kind !== "file" && node.kind !== "dir") throw new Error(`download refused: ${showValue(node.name)} is a ${node.kind}, not a regular file or folder`);
   assertSafeEntryName(node.name, { top });
+  if (SENSITIVE_DIRS.has(node.name.toLowerCase()) || (parent.toLowerCase() === ".git" && SENSITIVE_UNDER_GIT.has(node.name.toLowerCase()))) {
+    throw new Error(`download refused: ${showValue(node.name)} would configure or authenticate something on this machine`);
+  }
   const seen = new Set<string>();
   for (const c of node.children) {
     const k = foldKey(c.name);
     if (seen.has(k)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(c.name)}`);
     seen.add(k);
-    assertTreeAcceptable(c, false);
+    assertTreeAcceptable(c, false, node.name);
   }
 }
 

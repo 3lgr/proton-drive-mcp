@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { DriveService } from "../dist/services/drive.js";
 import { walkTree, abortBackgroundRefreshes, resetWalkCacheForTests, flushWalkIndexForTests, partialFields } from "../dist/services/walk.js";
 import { Semaphore } from "../dist/utils/semaphore.js";
-import { docxXmlToText } from "../dist/services/contentExtract.js";
 import { makeSandbox, startServer, waitFor, readPids, sleep } from "./helpers/mcp-client.mjs";
 
 const folder = (name) => ({ uid: `d-${name}`, parentUid: "p", type: "folder", name: { ok: true, value: name } });
@@ -102,16 +101,6 @@ describe("partial output fields", () => {
   });
 });
 
-describe("docx self-closing paragraphs", () => {
-  it("<w:p/> and <w:p w:rsidR=\"1\"/> emit an empty line", () => {
-    assert.equal(docxXmlToText("<w:p><w:t>a</w:t></w:p><w:p/><w:p w:rsidR=\"1\" /><w:p><w:t>b</w:t></w:p></w:body>"), "a\n\n\nb");
-  });
-  it("many unclosed <w:p openers stay linear", () => {
-    const t0 = Date.now();
-    docxXmlToText("<w:p " .repeat(200000));
-    assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0} ms`);
-  });
-});
 
 describe("SIGTERM during a download", () => {
   const sbs = [];

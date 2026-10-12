@@ -28,7 +28,7 @@ CLI:     node dist/cli.js <command>
 src/index.ts              MCP server: TOOLS (schemas), tool-surface derivation (gates, pagination),
                           schema enforcement, dispatch, lifecycle (signals, cancellation)
 src/cli.ts                Companion CLI (mirrors 45 of 47 tools; drive_read_file/drive_write_file are MCP-only)
-src/services/content.ts   drive_read_content: private-temp download, text/docx/pdf extraction, paging
+src/services/content.ts   drive_read_content: guarded private-temp download, UTF-8 text only, paging
 src/services/drive.ts     DriveService: one method per operation, CLI argv building, response parsing
 src/utils/subprocess.ts   Runs the CLI: timeouts, process-group kill, cancellation, sanitized errors
 src/utils/validation.ts   Argument validators (flag injection, traversal, types)
@@ -80,7 +80,7 @@ Tested against Proton Drive CLI 0.8.x (`TESTED_CLI = "0.8"` in `src/utils/cliVer
 - Sharing policy for links and invitations (`PROTON_DRIVE_SHARE_POLICY`).
 - Everything that carries text from Drive is returned in an untrusted envelope and sanitised; logs and errors use a
   closed vocabulary (codes, markers), never CLI output.
-- Documents (`.docx`/`.pdf`) are opt-in (`PROTON_DRIVE_ENABLE_DOC_EXTRACT=1`) and parsed in a sandboxed process.
+- Document parsing was removed (2.0.0): `drive_read_content` reads plain UTF-8 text only; binaries, PDF and Office files are refused. Less parsing code, less attack surface.
 - CLI children run in their own process group and are killed on timeout, cancellation, disconnect and SIGTERM/SIGINT.
 
 ## Testing strategy

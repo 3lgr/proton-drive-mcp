@@ -15,8 +15,11 @@ const HOME_DENY = [
   "Library/Keychains", "Library/Application Support/Claude", "Library/Application Support/Google/Chrome",
   "Library/Application Support/Firefox", "Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge",
   "Library/Safari", "Library/Cookies",
+  // places whose contents run or reconfigure things at login or on the next command
+  "Library/LaunchAgents", "Library/Services", ".config/autostart", ".config/systemd", ".config/fish", ".config/git",
+  ".oh-my-zsh/custom", ".local/share/applications", ".gitconfig", ".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile",
 ];
-const ABS_DENY = ["/etc", "/private/etc", "/var/root"];
+const ABS_DENY = ["/etc", "/private/etc", "/var/root", "/Library/LaunchAgents", "/Library/LaunchDaemons", "/usr/local/bin", "/usr/bin", "/bin", "/sbin", "/usr/sbin"];
 // Matched case-insensitively against a file's own name, anywhere. Note *.key also matches Keynote files: rename them,
 // or set PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1.
 const NAME_DENY = [
