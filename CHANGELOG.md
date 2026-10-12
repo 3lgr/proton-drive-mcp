@@ -29,11 +29,13 @@ Fixes from the independent post-release reviews. **One deliberate breaking chang
 - **N-04 error text.** Download-plan and download-guard errors name remote items by marker (length + salted hash), and
   list-shape parse errors name the JSON type plus a marker instead of 100 characters of CLI output.
 - **N-05 / N-07 scratch directories.** Download staging no longer sits beside the destination (for a destination equal
-  to the allowed root that was its parent, e.g. `$HOME`, outside the allowlist). All scratch directories are created
-  under a private base the server owns (`<tmp>/pdmcp-private-<uid>` or `<allowed root>/.pdmcp-private`, 0700) with an
-  ownership marker. The startup sweep looks only there and deletes only real 0700 directories of this uid with a valid
-  marker, old enough, whose creator pid is gone, without following links. `pdmcp-bin-*` (the verified CLI copy a
-  sibling instance runs) is never swept.
+  to the allowed root that was its parent, e.g. `$HOME`, outside the allowlist), and there is no fixed, shared or
+  predictable scratch location. Each process creates its own random 0700 directory (`mkdtemp` under the OS temp dir,
+  falling back to `<allowed root>/.pdmcp-private-<random>`, verified: real directory, same uid, mode 0700) and every
+  operation's scratch directory lives inside it. The download byte/entry ceiling is enforced while the CLI writes
+  (aborted at once, then removed). Cleanup is in `finally` and at exit, per entry, without following links. The startup
+  sweep was **removed** (it could be pointed at names an attacker influences, and it deleted the verified CLI copy
+  `pdmcp-bin-*` of a sibling instance); a directory orphaned by SIGKILL stays until removed by hand.
 - **N-08 `PROTON_DRIVE_PASS_ENV`.** `*` alone and prefixes shorter than 3 characters are refused; any use of the
   variable, and any refused value, is listed by `doctor` (`activeOptOuts`).
 

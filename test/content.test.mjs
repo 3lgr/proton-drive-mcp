@@ -8,14 +8,13 @@ import { readDriveContent, sliceCodePoints } from "../dist/services/content.js";
 import { callContext } from "../dist/utils/subprocess.js";
 import { makeSandbox, startServer } from "./helpers/mcp-client.mjs";
 import { usePrivateTmp } from "./helpers/private-tmp.mjs";
+import { scratchDirs } from "./helpers/scratch.mjs";
 
 
 const deps = {};
 // Private TMPDIR per test: readDirs() must only ever see this test's own pdmcp-read-* dirs.
 usePrivateTmp(beforeEach, afterEach);
-const readDirs = () => {
-  try { return readdirSync(join(tmpdir(), `pdmcp-private-${process.getuid()}`)).filter((n) => n.startsWith("pdmcp-read-")); } catch { return []; }
-};
+const readDirs = () => scratchDirs(tmpdir(), "pdmcp-read-");
 const LOCK = () => new Error("SQLiteError: database is locked");
 
 /** Fake DriveService: info() returns `node`, download() writes `name` with `bytes` into the dir it is given. */

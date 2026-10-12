@@ -1,7 +1,7 @@
 import { readdir, readFile, lstat } from "node:fs/promises";
 import { readdirSync, lstatSync } from "node:fs";
-import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
-import { createOwnedTemp, removeTreeSafe, serverTempBase } from "../utils/privateTemp.js";
+import { unregisterTempDir, removeTreeSafe } from "../utils/tempDirs.js";
+import { createOwnedTemp } from "../utils/privateTemp.js";
 import { join } from "node:path";
 import type { DriveService } from "./drive.js";
 import { validateLocalPath } from "../utils/validation.js";
@@ -80,9 +80,8 @@ export function sliceCodePoints(s: string, offset: number, max: number): { text:
  * moment more than `cap` bytes are on disk, so a lying file can not fill the disk before the post-check.
  */
 async function downloadBytes(drive: DriveService, path: string, cap: number): Promise<Buffer> {
-  const owned = createOwnedTemp(serverTempBase(), "pdmcp-read-");
+  const owned = createOwnedTemp("pdmcp-read-");
   const dir = owned.work;
-  registerTempDir(owned.root);
   try {
     const outer = callContext.getStore()?.signal;
     const controller = new AbortController();
@@ -118,7 +117,7 @@ async function downloadBytes(drive: DriveService, path: string, cap: number): Pr
     if (st.size > cap) throw new Error(`downloaded file is ${st.size} bytes, over the read cap of ${cap} bytes`);
     return await readFile(file);
   } finally {
-    try { removeTreeSafe(owned.root); } catch { /* the startup sweep takes it if it is ours and orphaned */ }
+    try { removeTreeSafe(owned.root); } catch { /* shutdown removes the whole process directory */ }
     unregisterTempDir(owned.root);
   }
 }

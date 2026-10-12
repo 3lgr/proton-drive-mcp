@@ -47,6 +47,8 @@ What the server enforces itself (so the model cannot talk its way past it):
 - binary pinning and a private verified copy (`PROTON_DRIVE_BIN_SHA256`), minimal child environment;
 - no document parsing at all: `drive_read_content` reads plain UTF-8 text only (PDF/Office parsers were removed to keep the attack surface small).
 
+- scratch space: no fixed or shared location (a random 0700 directory per process), the download ceiling is enforced while the CLI writes, cleanup per entry without following links, no global sweep;
+
 What it does not do:
 
 - it cannot make the model's own reasoning trustworthy; the envelope and markers raise the bar, they are not a proof;

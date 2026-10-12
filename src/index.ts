@@ -13,7 +13,6 @@ import { NeedsConfirmationError } from "./utils/errors.js";
 import { logger } from "./utils/logger.js";
 import { cliCompatWarning } from "./utils/cliVersion.js";
 import { abortBackgroundRefreshes } from "./services/walk.js";
-import { sweepStaleTempDirs, sweepStagingDirs } from "./utils/tempSweep.js";
 import { GATES, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
 import { strMarker } from "./utils/safeOutput.js";
@@ -182,8 +181,6 @@ export async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info("proton-drive-mcp running, version", VERSION);
-  void sweepStagingDirs();
-  void sweepStaleTempDirs(); // after connect so it can never delay initialize; best-effort, never throws
 
   // Probe the CLI after connecting so a slow `version` can never delay
   // `initialize` (hosts time out at ~5s). A missing CLI still leaves the server

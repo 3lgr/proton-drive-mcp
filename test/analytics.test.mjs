@@ -9,6 +9,7 @@ import {
 } from "../dist/services/analytics.js";
 import { DriveService } from "../dist/services/drive.js";
 import { usePrivateTmp } from "./helpers/private-tmp.mjs";
+import { scratchDirs } from "./helpers/scratch.mjs";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-09-30T00:00:00Z");
@@ -175,7 +176,7 @@ describe("verifyGroups", () => {
   usePrivateTmp(beforeEach, afterEach);
   it("an aborted verify still removes the hasher's temp dir", async () => {
     const ac = new AbortController();
-    const dups = () => { try { return readdirSync(join(tmpdir(), `pdmcp-private-${process.getuid()}`)).filter((x) => x.startsWith("pdmcp-dup-")).length; } catch { return 0; } };
+    const dups = () => scratchDirs(tmpdir(), "pdmcp-dup-").length;
     const before = dups();
     const drive = { download: async (_p, dir) => { writeFileSync(join(dir, "f.bin"), "x"); ac.abort(new Error("cancelled")); return { downloaded: 1, failed: 0 }; } };
     const hash = makeDriveHasher(drive);
