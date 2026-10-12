@@ -1,7 +1,7 @@
 {
-  "name": "proton-drive-mcp",
-  "version": "1.5.2",
-  "description": "MCP server and CLI that gives Claude full access to Proton Drive — upload, download, share, and manage your end-to-end encrypted files without leaving the conversation.",
+  "name": "@3lgr/proton-drive-mcp",
+  "version": "2.0.0",
+  "description": "Hardened fork of proton-drive-mcp: an MCP server and CLI that lets an AI assistant work with Proton Drive and Proton Photos through the official proton-drive CLI, with consent gates the model cannot bypass, a local path allowlist, a sharing policy and untrusted-content handling.",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
@@ -14,7 +14,9 @@
     "proton-drive-cli": "dist/cli.js"
   },
   "scripts": {
+    "prebuild": "node scripts/clean-dist.mjs",
     "build": "tsc",
+    "prepare": "node scripts/prepare-build.mjs",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "cli": "npm run build && node dist/cli.js",
@@ -29,28 +31,31 @@
     "prepublishOnly": "node scripts/block-manual-publish.mjs"
   },
   "keywords": [
-    "proton",
-    "proton-drive",
-    "mcp",
-    "cloud-storage",
-    "encryption",
-    "claude",
     "ai",
     "automation",
+    "claude",
+    "cloud-storage",
+    "encryption",
+    "hardened",
+    "mcp",
+    "prompt-injection",
+    "proton",
+    "proton-drive",
+    "security",
     "typescript"
   ],
   "author": {
-    "name": "googlarz",
-    "url": "https://github.com/googlarz"
+    "name": "Elger Rodrigues (3lgr)",
+    "url": "https://github.com/3lgr"
   },
   "license": "MIT",
-  "homepage": "https://github.com/googlarz/proton-drive-mcp#readme",
+  "homepage": "https://github.com/3lgr/proton-drive-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/googlarz/proton-drive-mcp.git"
+    "url": "git+https://github.com/3lgr/proton-drive-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/googlarz/proton-drive-mcp/issues"
+    "url": "https://github.com/3lgr/proton-drive-mcp/issues"
   },
   "engines": {
     "node": ">=22.0.0"
@@ -69,7 +74,8 @@
     "CHANGELOG.md",
     "glama.json",
     "smithery.yaml",
-    "Dockerfile"
+    "Dockerfile",
+    "SECURITY.md"
   ],
   "optionalDependencies": {
     "fflate": "0.8.3",
@@ -77,5 +83,11 @@
   },
   "overrides": {
     "proxy-addr": ">=2.0.8"
-  }
+  },
+  "contributors": [
+    {
+      "name": "Dawid Piaskowski (googlarz)",
+      "url": "https://github.com/googlarz"
+    }
+  ]
 }

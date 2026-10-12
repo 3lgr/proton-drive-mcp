@@ -12,6 +12,9 @@ import { sweepStaleTempDirs } from "../dist/utils/tempSweep.js";
 import { parseCliMajorMinor, cliCompatWarning } from "../dist/utils/cliVersion.js";
 import { loadOptional, makePdf, skipUnlessOptional } from "./helpers/optional-deps.mjs";
 
+// Document extraction is opt-in (fail closed); these suites test the extractor itself.
+process.env.PROTON_DRIVE_ENABLE_DOC_EXTRACT = "1";
+
 function fakeDrive({ node, name = "f", bytes }) {
   return {
     info: async () => node,

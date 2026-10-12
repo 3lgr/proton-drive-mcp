@@ -1,12 +1,12 @@
-name: proton-drive-mcp
-displayName: Proton Drive MCP
+name: proton-drive-mcp-hardened
+displayName: Proton Drive MCP (hardened fork)
 description: >
-  MCP server and CLI that gives Claude full access to Proton Drive —
-  upload, download, share, and manage your end-to-end encrypted files
-  without leaving the conversation.
+  Hardened fork of proton-drive-mcp (unofficial, not affiliated with Proton AG). MCP server and
+  CLI for Proton Drive and Proton Photos through the official proton-drive CLI, with consent
+  gates the model cannot bypass, a local path allowlist and a sharing policy.
 license: MIT
-homepage: https://github.com/googlarz/proton-drive-mcp
-repository: https://github.com/googlarz/proton-drive-mcp
+homepage: https://github.com/3lgr/proton-drive-mcp
+repository: https://github.com/3lgr/proton-drive-mcp
 categories:
   - storage
   - productivity
@@ -69,7 +69,8 @@ startCommand:
         description: "Absolute path to the root of your local Proton Drive sync folder. Required only for drive_read_file and drive_write_file. Example: /Users/you/Proton Drive"
   commandFunction: |-
     (config) => ({
+      // Pinned to a release tag on purpose: never run a floating version of a program that holds your session.
       command: "npx",
-      args: ["-y", "proton-drive-mcp"],
+      args: ["--yes", "github:3lgr/proton-drive-mcp#v2.0.0"],
       env: config.PROTON_DRIVE_SYNC_PATH ? { PROTON_DRIVE_SYNC_PATH: config.PROTON_DRIVE_SYNC_PATH } : {}
     })
