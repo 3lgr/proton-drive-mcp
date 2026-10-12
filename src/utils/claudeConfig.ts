@@ -64,6 +64,24 @@ export function isEphemeralInstall(p: string): boolean {
   return /[\\/]_npx[\\/]/.test(p);
 }
 
+/**
+ * A `node` on PATH that is the same file as the running one, as an absolute path that survives upgrades
+ * (/opt/homebrew/bin/node rather than /opt/homebrew/Cellar/node/<version>/bin/node). Same file means equal
+ * realpath, so this never selects a different install. Relative and empty PATH entries are skipped (they depend on
+ * the cwd). Falls back to process.execPath.
+ */
+export function stableNodePath(execPath: string = process.execPath, pathVar: string = process.env["PATH"] ?? ""): string {
+  let real: string;
+  try { real = realpathSync(execPath); } catch { return execPath; }
+  const name = process.platform === "win32" ? "node.exe" : "node";
+  for (const dir of pathVar.split(delimiter)) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const candidate = join(dir, name);
+    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real) return candidate; } catch { /* dangling link: next */ }
+  }
+  return execPath;
+}
+
 export function buildEntry(cliPath: string, syncPath?: string, binSha256?: string): McpEntry {
   const entryPath = serverEntryPath();
   if (isEphemeralInstall(entryPath)) {
@@ -72,7 +90,7 @@ export function buildEntry(cliPath: string, syncPath?: string, binSha256?: strin
   const env: Record<string, string> = { PROTON_DRIVE_BIN: cliPath };
   if (binSha256) env["PROTON_DRIVE_BIN_SHA256"] = binSha256;
   if (syncPath) env["PROTON_DRIVE_SYNC_PATH"] = syncPath;
-  return { command: process.execPath, args: [entryPath], env };
+  return { command: stableNodePath(), args: [entryPath], env };
 }
 
 export function isDirectory(p: string): boolean {

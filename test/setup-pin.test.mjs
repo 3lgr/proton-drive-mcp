@@ -58,7 +58,7 @@ describe("setup-claude-desktop --pin", () => {
   });
   it("without --pin nothing changes, even when the process env carries a pin", async () => {
     const f = join(tmp(), "c.json");
-    const r = await run(["setup-claude-desktop", "--config", f, "--write"], { PROTON_DRIVE_BIN_SHA256: sha(FAKE_CLI) });
+    const r = await run(["setup-claude-desktop", "--config", f, "--write"], { PROTON_DRIVE_BIN_SHA256: sha(FAKE_CLI), PATH: tmp() });
     assert.equal(r.code, 0, r.stderr);
     assert.deepEqual(entryOf(f), { command: process.execPath, args: [DIST_INDEX], env: { PROTON_DRIVE_BIN: FAKE_CLI } });
   });
