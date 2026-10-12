@@ -42,12 +42,15 @@ describe("upload tools send a snapshot", () => {
     for (const [rel, c] of Object.entries(files)) { mkdirSync(dirname(join(d, rel)), { recursive: true }); writeFileSync(join(d, rel), c); }
     return d;
   };
-  const snapshotsLeft = () => readdirSync(tmpdir()).filter((n) => n.startsWith("pdmcp-upload-"));
+  // Each server gets its own TMPDIR so snapshot counts are not disturbed by suites running in parallel.
+  let serverTmp;
+  const snapshotsLeft = () => readdirSync(serverTmp).filter((n) => n.startsWith("pdmcp-upload-"));
 
   async function upload(tool, args, env = {}) {
     const sb = makeSandbox();
+    serverTmp = mkdtempSync(join(base, "tmp-"));
     const cap = join(sb.dir, "capture.json");
-    const c = await startServer("tree", sb, { FAKE_TREE: join(sb.dir, "tree.json"), FAKE_UPLOAD_CAPTURE: cap, ...env });
+    const c = await startServer("tree", sb, { FAKE_TREE: join(sb.dir, "tree.json"), FAKE_UPLOAD_CAPTURE: cap, TMPDIR: serverTmp, ...env });
     writeFileSync(join(sb.dir, "tree.json"), "{}");
     try {
       const r = await c.call(tool, args);
@@ -59,7 +62,6 @@ describe("upload tools send a snapshot", () => {
     const d = tree({ "p/a.txt": "alpha", "p/sub/b.txt": "beta" });
     const when = new Date("2024-03-04T05:06:07Z");
     utimesSync(join(d, "p", "a.txt"), when, when);
-    const before = snapshotsLeft().length;
     const { r, capture } = await upload("drive_upload", { localPath: join(d, "p"), remotePath: "/my-files" });
     assert.equal(r.isError, false, r.text);
     assert.notEqual(capture.path, join(d, "p"));
@@ -70,7 +72,7 @@ describe("upload tools send a snapshot", () => {
     assert.equal(Math.round(capture.files["a.txt"].mtimeMs / 1000), Math.round(when.getTime() / 1000));
     assert.equal(capture.files["a.txt"].mode, 0o600);
     assert.equal(existsSync(capture.path), false, "snapshot removed");
-    assert.equal(snapshotsLeft().length, before);
+    assert.equal(snapshotsLeft().length, 0);
   });
 
   it("a single file is snapshotted too", async () => {
@@ -84,12 +86,11 @@ describe("upload tools send a snapshot", () => {
 
   const refused = async (label, mk, match, env = {}) => {
     const root = mk();
-    const before = snapshotsLeft().length;
     const { r, calls } = await upload("drive_upload", { localPath: root, remotePath: "/my-files" }, env);
     assert.equal(r.isError, true, `${label}: ${r.text}`);
     assert.match(r.text, match, label);
     assert.deepEqual(calls, [], `${label}: nothing may reach the CLI`);
-    assert.equal(snapshotsLeft().length, before, `${label}: snapshot removed`);
+    assert.equal(snapshotsLeft().length, 0, `${label}: snapshot removed`);
   };
 
   it("refuses a nested symlink", () => refused("symlink", () => { const d = tree({ "ok.txt": "1" }); symlinkSync("/etc/hosts", join(d, "l")); return d; }, /symlink/));
@@ -121,8 +122,9 @@ describe("upload tools send a snapshot", () => {
 
 describe("snapshot integrity: approval, copy and spawn (fault injection)", () => {
   let base;
-  before(() => { base = mkdtempSync(join(tmpdir(), "upfault-")); });
-  after(() => rmSync(base, { recursive: true, force: true }));
+  let savedTmp;
+  before(() => { base = mkdtempSync(join(tmpdir(), "upfault-")); savedTmp = process.env.TMPDIR; process.env.TMPDIR = base; });
+  after(() => { if (savedTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = savedTmp; rmSync(base, { recursive: true, force: true }); });
   const mk = () => {
     const d = mkdtempSync(join(base, "t-"));
     mkdirSync(join(d, "p", "sub"), { recursive: true });
@@ -136,7 +138,7 @@ describe("snapshot integrity: approval, copy and spawn (fault injection)", () =>
     catch (e) { return { error: e, reached }; }
     return { error: null, reached };
   };
-  const stagesLeft = () => readdirSync(tmpdir()).filter((n) => n.startsWith("pdmcp-upload-")).length;
+  const stagesLeft = () => readdirSync(base).filter((n) => n.startsWith("pdmcp-upload-")).length;
 
   it("clean tree: callback runs, staging removed", async () => {
     const root = mk();
