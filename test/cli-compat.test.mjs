@@ -26,11 +26,20 @@ describe("doctor cli-version", () => {
     const r = await doctor();
     assert.equal(check(r).status, "ok");
   });
-  it("0.9.x warns with hint, exit stays 0", async () => {
-    const r = await doctor("Proton Drive CLI cli-drive@0.9.1+abc\nProton Drive SDK js@0.22.0+abc\n");
+  it("0.9.x is a tested version too (ok)", async () => {
+    const r = await doctor("Proton Drive CLI cli-drive@0.9.0+abc\nProton Drive SDK js@0.22.2+abc\n");
+    assert.equal(check(r).status, "ok");
+    assert.match(check(r).message, /0\.8\.x, 0\.9\.x/);
+  });
+  it("0.10.x (not in the tested list) warns with hint listing both, exit stays 0", async () => {
+    const r = await doctor("Proton Drive CLI cli-drive@0.10.1+abc\nProton Drive SDK js@0.23.0+abc\n");
     assert.equal(check(r).status, "warn");
-    assert.match(check(r).hint, /Tested with 0\.8\.x/);
+    assert.match(check(r).hint, /Tested with 0\.8\.x, 0\.9\.x/);
     assert.equal(r.code, 0);
+  });
+  it("0.7.x warns", async () => {
+    const r = await doctor("Proton Drive CLI cli-drive@0.7.4+abc\n");
+    assert.equal(check(r).status, "warn");
   });
   it("unparsable version warns", async () => {
     const r = await doctor("garbage\n");
@@ -60,11 +69,12 @@ describe("startup probe", () => {
     await c.close();
     return err;
   }
-  it("warns once on stderr for a different version", async () => {
-    const err = await stderrFor("Proton Drive CLI cli-drive@0.9.0+abc\n");
-    assert.equal((err.match(/Tested with 0\.8\.x/g) ?? []).length, 1);
+  it("warns once on stderr for a version outside the tested list", async () => {
+    const err = await stderrFor("Proton Drive CLI cli-drive@0.10.0+abc\n");
+    assert.equal((err.match(/Tested with 0\.8\.x, 0\.9\.x/g) ?? []).length, 1);
   });
-  it("is silent for the tested version", async () => {
+  it("is silent for the tested versions (0.8 and 0.9)", async () => {
     assert.doesNotMatch(await stderrFor(), /Tested with/);
+    assert.doesNotMatch(await stderrFor("Proton Drive CLI cli-drive@0.9.0+abc\n"), /Tested with/);
   });
 });

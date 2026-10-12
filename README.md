@@ -544,12 +544,12 @@ Limits that come from the upstream `proton-drive` CLI (v0.8.0), not from this se
 
 | Component | Tested with |
 |---|---|
-| Proton Drive CLI | 0.8.x (SDK js 0.21) |
+| Proton Drive CLI | 0.8.x (SDK js 0.21), 0.9.x (SDK js 0.22; read-only live suite and list/create/trash exercised on 0.9.0) |
 | macOS | Live-tested against a real account |
 | Linux | CI with a fake CLI only |
 | Windows | Not supported (see [Platform support](#platform-support)) |
 
-`proton-drive-cli doctor` warns when the installed CLI is not 0.8.x, and the server logs one warning line to stderr at startup. Other versions may work but are unverified. If something breaks, open an issue at [github.com/3lgr/proton-drive-mcp/issues](https://github.com/3lgr/proton-drive-mcp/issues) with the output of `proton-drive version` and `proton-drive-cli doctor`.
+`proton-drive-cli doctor` warns when the installed CLI is not 0.8.x or 0.9.x, and the server logs one warning line to stderr at startup. Other versions may work but are unverified. If something breaks, open an issue at [github.com/3lgr/proton-drive-mcp/issues](https://github.com/3lgr/proton-drive-mcp/issues) with the output of `proton-drive version` and `proton-drive-cli doctor`.
 
 ## Platform support
 
