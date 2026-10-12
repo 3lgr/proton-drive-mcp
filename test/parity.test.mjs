@@ -32,9 +32,12 @@ before(async () => {
 after(async () => { await client?.close(); sb?.cleanup(); });
 
 describe("tool-name parity", () => {
-  it("src/index.ts `case` labels match tools/list", () => {
-    const cases = [...read("src/index.ts").matchAll(/^\s*case "([a-z_]+)":/gm)].map((m) => m[1]).filter(toolLike);
-    assertSame("src/index.ts switch cases", toolNames, cases);
+  it("src/server/handlers/*.ts handler keys match tools/list", () => {
+    const dir = join(ROOT, "src", "server", "handlers");
+    const keys = readdirSync(dir).filter((f) => f.endsWith(".ts") && f !== "index.ts")
+      .flatMap((f) => [...readFileSync(join(dir, f), "utf8").matchAll(/^  ([a-z_]+): async \(/gm)].map((m) => m[1])).filter(toolLike);
+    assert.equal(new Set(keys).size, keys.length, "a tool has two handlers");
+    assertSame("src/server/handlers", toolNames, keys);
   });
 
   it("glama.json tools match tools/list", () => {
