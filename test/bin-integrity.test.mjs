@@ -3,9 +3,9 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, chmodSync, rmSync, appendFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, chmodSync, rmSync, appendFileSync, existsSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { makeSandbox, startServer, nonVersionCalls, fakeEnv, FAKE_CLI, DIST_CLI } from "./helpers/mcp-client.mjs";
 
 const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
@@ -47,7 +47,9 @@ describe("PROTON_DRIVE_BIN_SHA256", () => {
     } finally { await c.close(); sb.cleanup(); }
   });
 
-  it("a binary modified after the first successful check is re-hashed and refused", async () => {
+  const exeOf = (sb) => readFileSync(sb.argvLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).exe);
+
+  it("with a pin, ONLY a private 0500 copy in a 0700 directory is executed, never the original", async () => {
     const d = tmp();
     const bin = join(d, "proton-drive");
     copyFileSync(FAKE_CLI, bin); chmodSync(bin, 0o755);
@@ -55,13 +57,110 @@ describe("PROTON_DRIVE_BIN_SHA256", () => {
     const c = await startServer("json", sb, { PROTON_DRIVE_BIN: bin, PROTON_DRIVE_BIN_SHA256: sha(bin) });
     try {
       assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
-      appendFileSync(bin, "\n// tampered\n");
-      const later = new Date(Date.now() + 5000);
-      utimesSync(bin, later, later);
+      const exes = new Set(exeOf(sb));
+      assert.equal(exes.size, 1);
+      const [exe] = [...exes];
+      assert.notEqual(exe, bin);
+      assert.match(exe, /pdmcp-bin-[^/]+\/proton-drive$/);
+      assert.equal(sha(exe), sha(bin));
+      assert.equal(statSync(exe).mode & 0o777, 0o500);
+      assert.equal(statSync(dirname(exe)).mode & 0o777, 0o700);
+      globalThis.__lastExe = exe;
+    } finally { await c.close(); sb.cleanup(); }
+    assert.equal(existsSync(globalThis.__lastExe), false, "the private copy is removed on shutdown");
+  });
+
+  it("the original replaced after verification is irrelevant: the verified copy keeps running", async () => {
+    const d = tmp();
+    const bin = join(d, "proton-drive");
+    copyFileSync(FAKE_CLI, bin); chmodSync(bin, 0o755);
+    const sb = makeSandbox();
+    const c = await startServer("json", sb, { PROTON_DRIVE_BIN: bin, PROTON_DRIVE_BIN_SHA256: sha(bin) });
+    try {
+      assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
+      writeFileSync(bin, "#!/bin/sh\necho pwned > " + join(d, "pwned") + "\n");
+      chmodSync(bin, 0o755);
+      assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
+      assert.equal(existsSync(join(d, "pwned")), false);
+    } finally { await c.close(); sb.cleanup(); }
+  });
+
+  it("a symlink as PROTON_DRIVE_BIN: its target is what is hashed and copied; retargeting later changes nothing", async () => {
+    const d = tmp();
+    const real = join(d, "real-proton-drive");
+    copyFileSync(FAKE_CLI, real); chmodSync(real, 0o755);
+    const evil = join(d, "evil");
+    writeFileSync(evil, "#!/bin/sh\ntouch " + join(d, "pwned") + "\n"); chmodSync(evil, 0o755);
+    const link = join(d, "proton-drive");
+    symlinkSync(real, link);
+    const sb = makeSandbox();
+    const c = await startServer("json", sb, { PROTON_DRIVE_BIN: link, PROTON_DRIVE_BIN_SHA256: sha(real) });
+    try {
+      assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
+      unlinkSync(link); symlinkSync(evil, link);
+      assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
+      assert.equal(existsSync(join(d, "pwned")), false);
+    } finally { await c.close(); sb.cleanup(); }
+  });
+
+  it("a symlink pointing at different bytes than the pin is refused and leaves no copy behind", async () => {
+    const d = tmp();
+    const evil = join(d, "evil");
+    writeFileSync(evil, "#!/bin/sh\ntouch " + join(d, "pwned") + "\n"); chmodSync(evil, 0o755);
+    const link = join(d, "proton-drive");
+    symlinkSync(evil, link);
+    const sb = makeSandbox();
+    const c = await startServer("json", sb, { PROTON_DRIVE_BIN: link, PROTON_DRIVE_BIN_SHA256: sha(FAKE_CLI) });
+    try {
       const r = await c.call("drive_list", { path: "/my-files" });
       assert.equal(r.isError, true);
       assert.match(r.text, /does not match/);
+      assert.equal(existsSync(join(d, "pwned")), false);
     } finally { await c.close(); sb.cleanup(); }
+  });
+
+  it("an adulterated copy is refused on the next call", async () => {
+    const d = tmp();
+    const bin = join(d, "proton-drive");
+    copyFileSync(FAKE_CLI, bin); chmodSync(bin, 0o755);
+    const sb = makeSandbox();
+    const c = await startServer("json", sb, { PROTON_DRIVE_BIN: bin, PROTON_DRIVE_BIN_SHA256: sha(bin) });
+    try {
+      assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
+      const [exe] = new Set(exeOf(sb));
+      chmodSync(dirname(exe), 0o700); chmodSync(exe, 0o700);
+      appendFileSync(exe, "\n// adulterated\n");
+      chmodSync(exe, 0o500);
+      const r = await c.call("drive_list", { path: "/my-files" });
+      assert.equal(r.isError, true);
+      assert.match(r.text, /modified|no longer matches/);
+    } finally { await c.close(); sb.cleanup(); }
+  });
+
+  it("an unreadable binary fails closed", { skip: process.getuid?.() === 0 && "root reads anything" }, async () => {
+    const d = tmp();
+    const bin = join(d, "proton-drive");
+    copyFileSync(FAKE_CLI, bin); chmodSync(bin, 0o755);
+    const pin = sha(bin);
+    chmodSync(bin, 0o000);
+    const sb = makeSandbox();
+    const c = await startServer("json", sb, { PROTON_DRIVE_BIN: bin, PROTON_DRIVE_BIN_SHA256: pin });
+    try {
+      const r = await c.call("drive_list", { path: "/my-files" });
+      assert.equal(r.isError, true);
+      assert.match(r.text, /could not be copied|cannot be read|refusing/);
+    } finally { chmodSync(bin, 0o755); await c.close(); sb.cleanup(); }
+  });
+
+  it("whitespace around a pin is tolerated; an empty or blank variable means 'not pinned'; garbage is an error", async () => {
+    for (const [pin, expectError] of [[`  ${sha(FAKE_CLI).toUpperCase()}\n`, false], ["", false], ["   ", false], ["xyz", true], ["sha256:" + "g".repeat(64), true], [sha(FAKE_CLI).slice(0, 63), true]]) {
+      const sb = makeSandbox();
+      const c = await startServer("json", sb, { PROTON_DRIVE_BIN_SHA256: pin });
+      try {
+        const r = await c.call("drive_list", { path: "/my-files" });
+        assert.equal(r.isError, expectError, `${JSON.stringify(pin)}: ${r.text}`);
+      } finally { await c.close(); sb.cleanup(); }
+    }
   });
 });
 
