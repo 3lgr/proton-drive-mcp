@@ -117,9 +117,13 @@ describe("PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH=1", () => {
     assert.throws(() => assertLocalPathAllowed(join(fakeHome, ".ssh", "id_x")), /protected location/);
     assert.throws(() => assertLocalPathAllowed(join(base, ".env")), /secret file/);
   });
-  it("only exactly '1' counts", () => {
+  it("only exactly '1' or 'true' counts; every malformed value leaves the allowlist in force", () => {
+    for (const v of ["", " ", "false", "no", "0", "yes", "on", "TRUE", " 1", "1 ", "True", "2"]) {
+      process.env.PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH = v;
+      assert.throws(() => assertLocalPathAllowed(join(base, "x.txt")), /outside the default local folder/, JSON.stringify(v));
+    }
     process.env.PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH = "true";
-    assert.throws(() => assertLocalPathAllowed(join(base, "x.txt")), /outside the default local folder/);
+    assertLocalPathAllowed(join(base, "x.txt"));
   });
 });
 

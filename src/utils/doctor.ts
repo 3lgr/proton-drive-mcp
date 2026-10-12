@@ -4,6 +4,7 @@ import { DriveService } from "../services/drive.js";
 import { runDriveRaw } from "./subprocess.js";
 import { cliCompatWarning, TESTED_CLI } from "./cliVersion.js";
 import { binaryRisks, expectedSha256, trustedBinary, HASH_ENV, BIN_ENV } from "./binaryIntegrity.js";
+import { activeOptOuts } from "./envFlag.js";
 import { describeRoots, validateRoot, DEFAULT_ROOT_NAME, ANY_LOCAL_ENV } from "./localguard.js";
 import { defaultConfigPath, isDirectory, isExecutableFile, resolveBinary, resolveDriveCli, SERVER_KEY } from "./claudeConfig.js";
 
@@ -160,6 +161,10 @@ export async function runDoctor(configPath?: string): Promise<{ ok: boolean; che
   const cli = await cliChecks();
   checks.push(...cli.checks);
   checks.push(localRootCheck());
+  const opts = activeOptOuts();
+  checks.push(opts.length === 0
+    ? { id: "opt-outs", status: "ok", message: "no protection is switched off" }
+    : { id: "opt-outs", status: "warn", message: `${opts.length} opt-out(s) active: ${opts.join("; ")}`, hint: "Each one is a deliberate relaxation; unset it unless you need it." });
   const sync = syncPathCheck();
   if (sync) checks.push(sync);
   checks.push(configCheck(configPath ? resolve(configPath) : defaultConfigPath(), cli.cliPath));

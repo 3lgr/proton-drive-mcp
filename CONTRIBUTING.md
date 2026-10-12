@@ -20,6 +20,9 @@ Node 22 or newer. Tests use `test/helpers/fake-cli.mjs` as `PROTON_DRIVE_BIN`; `
 
 - **Tests first** for logic (red, green, refactor). A behaviour change that touches a security control needs a
   regression test that fails without the change.
+- **Every tool needs a `TOOL_POLICY` entry** (`src/server/policy.ts`): class, consent mode, validator and the names of
+  its local-path arguments. Startup and `test/policy-matrix.test.mjs` fail for a tool without one. Boolean opt-outs go
+  through `envFlag()` (exactly `1` or `true`), never an ad-hoc comparison.
 - **Gates live in one table** (`src/policy/gates.ts`). A new tool that deletes, shares or leaves the machine must be
   classified there and in `src/policy/sharePolicy.ts` (the parity tests fail otherwise).
 - **No free strings in logs or errors.** Use `src/utils/safeOutput.ts` (codes, markers). Text from the CLI, the file

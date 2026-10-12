@@ -73,6 +73,13 @@ Tested against Proton Drive CLI 0.8.x (`TESTED_CLI = "0.8"` in `src/utils/cliVer
     and non-strict gated tools accept prompt-level `confirmed: true`;
   - the companion CLI is typed by a human: the same table says which commands need `--confirm`.
   `confirmed` is therefore a hint for non-eliciting clients, never proof of consent.
+- **Registry and dispatcher** (`src/server/policy.ts`, `src/server/dispatch.ts`): default deny. Each tool has a
+  `TOOL_POLICY` entry (class, consent `none|dispatcher|handler`, validator, local-path args). The dispatcher resolves
+  declared local arguments against the allowlist, runs validation and the gate for dispatcher-consent tools, and wraps
+  the drive for handler-consent tools so a mutating call before the gate is refused. `assertRegistryComplete` runs at
+  startup. Limitation: only dispatcher-consent tools receive dispatcher-normalised arguments; other handlers still
+  validate their own raw arguments.
+- Opt-out switches are strict booleans (`src/utils/envFlag.ts`: exactly `1` or `true`); `doctor` lists the active ones.
 - Local paths: an ALLOWLIST (default `~/ProtonDriveMCP`, or `PROTON_DRIVE_LOCAL_ROOT`; `PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH=1`
   lifts it) resolved with `realpath.native`; the credential and secret-name denylist stays as defence in depth. Downloads: names validated, private staging, pure plan, no
   overwrite. Uploads: frozen hashed snapshot bound to the approved manifest.

@@ -106,8 +106,8 @@ describe("approval policy", () => {
     assert.equal(no.kind, "needs-confirm");
   });
 
-  it("opt-in only counts when exactly '1'", async () => {
-    for (const val of ["true", "yes", "0", ""]) {
+  it("opt-in only counts when exactly '1' or 'true'", async () => {
+    for (const val of ["yes", "0", "", "false", "TRUE", " 1", "1 ", "on", "no"]) {
       const { approver } = mk({ env: { PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE: val } });
       const v = await approver("drive_empty_trash", strict, { confirmed: true }, "m");
       assert.equal(v.allowed, false, `value ${JSON.stringify(val)}`);

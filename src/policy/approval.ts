@@ -1,6 +1,7 @@
 // Decides whether a gated call may proceed. The model controls `confirmed`, so on its own it is never
 // proof of consent: when the client can ask the human (MCP elicitation) the human is ALWAYS asked.
 import type { Args, GateSpec } from "./gates.js";
+import { envFlag } from "../utils/envFlag.js";
 
 export const UNATTENDED_ENV = "PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE";
 const WINDOW_MS = 60_000;
@@ -42,7 +43,7 @@ export function createApprover(deps: ApprovalDeps): Approver {
     // The client cannot ask the human, so nothing but the model's own flag is left.
     const confirmed = a.confirmed === true;
     if (spec.strict) {
-      if (env[UNATTENDED_ENV] !== "1") {
+      if (!envFlag(UNATTENDED_ENV, env)) {
         return {
           allowed: false, kind: "blocked-no-elicitation",
           message:
