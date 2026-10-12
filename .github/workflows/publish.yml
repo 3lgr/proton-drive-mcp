@@ -63,6 +63,8 @@ jobs:
 
   publish:
     needs: verify
+    # Opt-in: set the repository variable PUBLISH_TO_NPM=true after configuring the npm trusted publisher.
+    if: ${{ vars.PUBLISH_TO_NPM == 'true' }}
     runs-on: ubuntu-latest
     environment: npm-publish
     permissions:
