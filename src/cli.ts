@@ -22,6 +22,7 @@ import { readDriveContent } from "./services/content.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { validateRemotePath, validateRemotePathList, validateLocalPath, validateEmail, validateMessage, validateName, validateFlagValue } from "./utils/validation.js";
 import { GATES, type Args } from "./policy/gates.js";
+import { assertUploadTreeClean } from "./utils/uploadScan.js";
 import { freezeDownload, freezePhotoDownload, safeDownload, safePhotoDownload } from "./services/downloadGuard.js";
 import {
   UPLOAD_FILE_STRATEGIES, UPLOAD_FOLDER_STRATEGIES, DOWNLOAD_FILE_STRATEGIES, DOWNLOAD_FOLDER_STRATEGIES,
@@ -295,7 +296,7 @@ async function run() {
       const rawLocal = sub;
       if (!rawLocal) { console.error("Usage: upload <local> <remote> [--file-conflict X] [--folder-conflict X] [--skip-thumbnails]"); process.exit(1); }
       let local: string;
-      try { local = validateLocalPath(rawLocal, { scan: true }); }
+      try { local = validateLocalPath(rawLocal, { scan: true }); assertUploadTreeClean(local); }
       catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); return; }
       const remote = requirePath(rest[0], "upload <local> <remote>");
       const fileConflictRaw = choice("--file-conflict", UPLOAD_FILE_STRATEGIES, "skip");
@@ -618,7 +619,7 @@ async function run() {
         if (positionals.length === 0) { console.error("Usage: photo upload <local>... [--conflict X]"); process.exit(1); return; }
         const localPaths: string[] = [];
         for (const p of positionals) {
-          try { localPaths.push(validateLocalPath(p, { scan: true })); }
+          try { const v = validateLocalPath(p, { scan: true }); assertUploadTreeClean(v); localPaths.push(v); }
           catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); return; }
         }
         if (!(PHOTO_UPLOAD_STRATEGIES as readonly string[]).includes(conflictRaw)) {

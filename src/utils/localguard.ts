@@ -6,22 +6,25 @@ import { homedir } from "node:os";
 import { resolve, dirname, basename, join, relative, isAbsolute, sep, delimiter } from "node:path";
 
 const HOME_DENY = [
-  ".ssh",
-  ".aws",
-  ".gnupg",
-  ".kube",
-  ".docker",
-  ".npmrc",
-  ".netrc",
-  ".pgpass",
-  ".config/gcloud",
-  ".claude",
-  ".claude.json",
-  "Library/Keychains",
-  "Library/Application Support/Claude",
+  ".ssh", ".aws", ".gnupg", ".kube", ".docker", ".npmrc", ".netrc", ".pgpass", ".config/gcloud", ".claude", ".claude.json",
+  ".git-credentials", ".config/git/credentials", ".config/gh", ".azure", ".oci", ".config/op", ".op", ".password-store", ".vault-token",
+  ".pypirc", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".m2/settings-security.xml", ".config/rclone",
+  ".terraform.d/credentials.tfrc.json", ".s3cfg", ".boto", ".zsh_history", ".bash_history", ".local/share/keyrings",
+  // browser profiles: cookies, saved logins, session tokens
+  ".mozilla", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".config/microsoft-edge",
+  "Library/Keychains", "Library/Application Support/Claude", "Library/Application Support/Google/Chrome",
+  "Library/Application Support/Firefox", "Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge",
+  "Library/Safari", "Library/Cookies",
 ];
 const ABS_DENY = ["/etc", "/private/etc", "/var/root"];
-const NAME_DENY = [/^\.env(\..*)?$/, /^id_rsa/, /^id_ed25519/, /\.pem$/, /\.p12$/, /\.pfx$/, /\.keychain/];
+// Matched case-insensitively against a file's own name, anywhere. Note *.key also matches Keynote files: rename them,
+// or set PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1.
+const NAME_DENY = [
+  /^\.env(\..*)?$/, /^id_rsa/, /^id_ed25519/, /^id_ecdsa/, /^id_dsa/,
+  /\.pem$/, /\.p12$/, /\.pfx$/, /\.key$/, /\.ppk$/, /\.jks$/, /\.keystore$/, /\.kdbx?$/, /\.keychain/,
+  /^credentials(\.json)?$/, /^\.git-credentials$/, /^\.htpasswd$/, /^\.netrc$/, /^\.pgpass$/, /^\.npmrc$/, /^\.pypirc$/,
+  /\.tfstate(\.backup)?$/,
+];
 
 // macOS (APFS/HFS+) and Windows volumes are normally case-insensitive and Unicode-normalisation-insensitive, but
 // realpath does not canonicalise a tail that does not exist (and the JS realpath does not canonicalise case at
@@ -73,9 +76,14 @@ function realResolve(p: string, depth = 0): string {
   }
 }
 
-/** Protected absolute locations, or null when the denylist is off (allowlist set or PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1). */
+/** True unless PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1. A LOCAL_ROOT allowlist narrows access further; it never switches the denylist off. */
+function denylistEnabled(): boolean {
+  return process.env["PROTON_DRIVE_ALLOW_SENSITIVE_PATHS"] !== "1";
+}
+
+/** Protected absolute locations, or null when the denylist is off (PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1). */
 function deniedPaths(): Set<string> | null {
-  if (rootsEnv().length > 0 || process.env["PROTON_DRIVE_ALLOW_SENSITIVE_PATHS"] === "1") return null;
+  if (!denylistEnabled()) return null;
   const home = homedir();
   const denied = new Set<string>();
   for (const rel of HOME_DENY) {
@@ -96,13 +104,19 @@ function rootsEnv(): string[] {
 
 const nameDenied = (name: string): boolean => NAME_DENY.some((re) => re.test(name.toLowerCase()));
 
-/** True when a directory entry must not be read during a recursive scan (secret-file name or protected path). Always false when the denylist is off. */
+/**
+ * True when a directory entry must not be read during a recursive scan: a secret-file name, a protected path, or
+ * (with PROTON_DRIVE_LOCAL_ROOT) a path that resolves outside the allowed roots. Names and paths are always
+ * checked unless PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1.
+ */
 export function isProtectedEntry(fullPath: string, name: string): boolean {
+  const lexical = resolve(fullPath);
+  const real = realResolve(lexical);
+  const roots = rootsEnv();
+  if (roots.length > 0 && !roots.some((r) => isInside(realResolve(r), real))) return true;
   const denied = deniedPaths();
   if (!denied) return false;
   if (nameDenied(name)) return true;
-  const lexical = resolve(fullPath);
-  const real = realResolve(lexical);
   for (const d of denied) if (isProtectedInside(d, real) || isProtectedInside(d, lexical)) return true;
   return false;
 }
@@ -116,14 +130,8 @@ export function assertLocalPathAllowed(absPath: string, opts: { scan?: boolean }
   const real = realResolve(lexical);
 
   const roots = rootsEnv();
-  if (roots.length > 0) {
-    const ok = roots.some((r) => isInside(realResolve(r), real));
-    if (!ok) {
-      throw new Error(
-        `local path is outside PROTON_DRIVE_LOCAL_ROOT: ${absPath}`
-      );
-    }
-    return;
+  if (roots.length > 0 && !roots.some((r) => isInside(realResolve(r), real))) {
+    throw new Error(`local path is outside PROTON_DRIVE_LOCAL_ROOT: ${absPath}`);
   }
 
   const denied = deniedPaths();

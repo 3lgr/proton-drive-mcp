@@ -38,6 +38,7 @@ import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/a
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
+import { assertUploadTreeClean } from "./utils/uploadScan.js";
 import {
   freezeDownload, freezePhotoDownload, precheckDownload, precheckPhotoDownload, safeDownload, safePhotoDownload, describeDownload, describePhotoDownload,
 } from "./services/downloadGuard.js";
@@ -1286,6 +1287,7 @@ export async function main() {
           const fcs = parseStrategy(a.fileConflictStrategy, UPLOAD_FILE_STRATEGIES, "fileConflictStrategy", "skip");
           const dcs2 = parseStrategy(a.folderConflictStrategy, UPLOAD_FOLDER_STRATEGIES, "folderConflictStrategy", "skip");
           const uploadLocal = validateLocalPath(a.localPath, { scan: true });
+          assertUploadTreeClean(uploadLocal);
           const uploadRemote = validateRemotePath(a.remotePath);
           await gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 });
           const uploadResult = await drive.upload(uploadLocal, uploadRemote, fcs, dcs2, a.skipThumbnails === true);
@@ -1586,6 +1588,7 @@ export async function main() {
         case "photos_upload": {
           if (!Array.isArray(a.localPaths) || a.localPaths.length === 0) return fail("localPaths must be a non-empty array of strings");
           const uploadPaths = a.localPaths.map((p) => validateLocalPath(p, { scan: true }));
+          uploadPaths.forEach((p) => assertUploadTreeClean(p));
           const pucs = parseStrategy(a.conflictStrategy, PHOTO_UPLOAD_STRATEGIES, "conflictStrategy", "skip");
           const uploadSummary = await drive.photoUpload(uploadPaths, pucs);
           if (uploadSummary.failedItems > 0) {

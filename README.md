@@ -440,7 +440,7 @@ The server offers four MCP prompts (also declared in the MCPB manifest): `organi
 ## Operational notes
 
 - Long listings are paginated (`limit` / `offset`, response `{total, offset, limit, hasMore, items}`) to keep responses small. Responses are compact JSON.
-- Local paths passed to upload/download/photos tools are checked: credential locations (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.claude*`, keychains, `.env` files, …) are refused. Set `PROTON_DRIVE_LOCAL_ROOT` to allow only specific directories.
+- Local paths passed to upload/download/photos tools are checked: credential locations (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.claude*`, keychains, `.env` files, …) are refused. Set `PROTON_DRIVE_LOCAL_ROOT` to allow only specific directories (the credential and secret-name denylist stays active inside them). Folder uploads are scanned recursively first and refused if they hold a secret-looking file or any symlink.
 - The sync-folder tools (`drive_read_file` / `drive_write_file`) refuse to follow symlinks out of `PROTON_DRIVE_SYNC_PATH`.
 - Error messages come from the CLI's own output; the command line (and therefore any `--password`) is never echoed back.
 - `drive_move` accepts a full destination path (parent + new name) for a familiar interface, but the underlying CLI only has separate `move` (change parent) and `rename` (change name) commands — this MCP translates automatically, issuing one or both as needed.
@@ -512,7 +512,7 @@ Every tool group was live-tested on 2026-09-28 against a real Proton account, **
 |---|---|---|
 | `PROTON_DRIVE_SYNC_PATH` | Optional | Absolute path to your local Proton Drive sync folder root (e.g. `/Users/you/Proton Drive`). Required only for `drive_read_file` and `drive_write_file`. The Proton Drive desktop app must be running to sync written files to the cloud. |
 | `PROTON_DRIVE_BIN` | Optional | Override the `proton-drive` binary name or path (default: `proton-drive`; an empty value counts as unset). Useful for non-standard installations. |
-| `PROTON_DRIVE_LOCAL_ROOT` | Optional | Path-delimiter-separated list of local directories that upload/download/photos tools may touch. Unset = any path except the built-in credential denylist. |
+| `PROTON_DRIVE_LOCAL_ROOT` | Optional | Path-delimiter-separated list of local directories that upload/download/photos tools may touch. Unset = any path except the built-in credential denylist. The denylist (credential folders, secret-looking names such as `.env`, `*.pem`, `*.key`, `*.kdbx`) and the recursive upload scan stay active inside the roots. |
 | `PROTON_DRIVE_ALLOW_SENSITIVE_PATHS` | Optional | Set to `1` to disable the built-in credential-location denylist (not recommended). |
 | `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE` | Optional | Set to `1` to let irreversible or outward-facing tools (`drive_empty_trash`, `drive_delete`, `drive_share_*`, `drive_auth_logout`, `photos_delete_album`, `drive_invitation_*`, `remove` download strategies) run on a model-supplied `confirmed: true` when the MCP client cannot ask the human (no elicitation). Default: those calls are refused. Ignored when the client supports elicitation: the human is always asked. |
 | `PROTON_DRIVE_DOWNLOAD_MAX_BYTES` | Optional | Most bytes one `drive_download`/`photos_download` call may bring in (default 53687091200 = 50 GiB). Checked against the remote listing before the transfer and against the real bytes in the staging area before anything is placed. |

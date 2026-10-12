@@ -14,7 +14,11 @@ export const MAX_LOCAL_ENTRIES = 50_000;
 const MTIME_TOLERANCE_MS = 2000; // Drive stores the claimed mtime; filesystems round differently
 
 export interface LocalFile { path: string; size: number; mtimeMs: number }
-export interface LocalScan { files: LocalFile[]; scanned: number; symlinksSkipped: number; unreadable: number; protectedSkipped: number; truncated: boolean }
+export interface LocalScan {
+  files: LocalFile[]; scanned: number; symlinksSkipped: number; unreadable: number; protectedSkipped: number; truncated: boolean;
+  /** First few symlinks / protected entries (relative paths), for callers that must refuse rather than skip. */
+  findings: { path: string; reason: "symlink" | "protected" }[];
+}
 
 export type Compare = "size-mtime" | "sha1";
 export type Direction = "up" | "down" | "both";
@@ -38,7 +42,8 @@ export function makeIgnore(patterns: string[]): (relPath: string) => boolean {
 
 /** Bounded, symlink-safe local scan: symlinks are counted, never followed. */
 export function scanLocal(root: string, ignore: (rel: string) => boolean, maxEntries = MAX_LOCAL_ENTRIES): LocalScan {
-  const out: LocalScan = { files: [], scanned: 0, symlinksSkipped: 0, unreadable: 0, protectedSkipped: 0, truncated: false };
+  const out: LocalScan = { files: [], scanned: 0, symlinksSkipped: 0, unreadable: 0, protectedSkipped: 0, truncated: false, findings: [] };
+  const note = (path: string, reason: "symlink" | "protected") => { if (out.findings.length < 10) out.findings.push({ path, reason }); };
   const stack = [root];
   while (stack.length) {
     const dir = stack.pop() as string;
@@ -51,8 +56,8 @@ export function scanLocal(root: string, ignore: (rel: string) => boolean, maxEnt
       if (ignore(rel)) continue;
       if (out.scanned >= maxEntries) { out.truncated = true; return out; }
       out.scanned++;
-      if (e.isSymbolicLink()) { out.symlinksSkipped++; continue; }
-      if (isProtectedEntry(full, e.name)) { out.protectedSkipped++; continue; }
+      if (e.isSymbolicLink()) { out.symlinksSkipped++; note(rel, "symlink"); continue; }
+      if (isProtectedEntry(full, e.name)) { out.protectedSkipped++; note(rel, "protected"); continue; }
       if (e.isDirectory()) { stack.push(full); continue; }
       if (!e.isFile()) continue;
       try {
