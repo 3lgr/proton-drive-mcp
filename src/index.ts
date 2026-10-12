@@ -37,7 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
-import { UNTRUSTED_TOOLS, wrapUntrusted, sanitizeMessage } from "./policy/untrusted.js";
+import { UNTRUSTED_TOOLS, wrapUntrusted, sanitizeMessage, sanitizeDeep, sanitizeString, newStats } from "./policy/untrusted.js";
 import { loadSharePolicy, checkInvite, checkPublicLink } from "./policy/sharePolicy.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
 import { precheckUpload, withUploadSnapshot } from "./services/uploadSnapshot.js";
@@ -87,17 +87,17 @@ function handleError(err: unknown): ToolResult {
   return fail(`Unexpected error: ${truncate(String(err))}`);
 }
 
-// F-07: text written by other people travels inside an envelope, sanitised; error text is cleaned too.
+// F-07: the single place every tool response passes through. Drive-originated text is wrapped in the envelope;
+// every other string (acks, errors, partial results) goes through the same sanitiser. No path around it.
 function presentResult(tool: string, r: ToolResult): ToolResult {
   const first = r.content[0];
   if (!first) return r;
-  if (r.isError) return { ...r, content: [{ type: "text", text: sanitizeMessage(first.text) }] };
-  if (!(tool in UNTRUSTED_TOOLS)) return r;
-  try {
-    return { ...r, content: [{ type: "text", text: JSON.stringify(wrapUntrusted(tool, JSON.parse(first.text))) }] };
-  } catch {
-    return r; // not JSON: nothing structured to wrap
-  }
+  const text = (t: string): ToolResult => ({ ...r, content: [{ type: "text", text: t }] });
+  if (r.isError) return text(sanitizeMessage(first.text));
+  let parsed: unknown;
+  try { parsed = JSON.parse(first.text); } catch { return text(sanitizeMessage(first.text)); }
+  if (tool in UNTRUSTED_TOOLS) return text(JSON.stringify(wrapUntrusted(tool, parsed)));
+  return text(JSON.stringify(sanitizeDeep(parsed, [], newStats())));
 }
 
 function paginate<T>(all: T[], a: Record<string, unknown>, defaultLimit: number) {
@@ -1645,7 +1645,7 @@ export async function main() {
         }
 
         default:
-          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${sanitizeString(String(name), { cap: 100 })}`);
       }
     } catch (err) {
       if (err instanceof McpError) throw err;
