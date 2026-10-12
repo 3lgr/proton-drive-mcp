@@ -169,6 +169,11 @@ export function activeRoots(): string[] {
   return [ensureDefaultRoot()];
 }
 
+/** The allowed root that contains `realPath` (already resolved), or undefined when there is none / no allowlist. */
+export function allowedRootFor(realPath: string): string | undefined {
+  return activeRoots().find((r) => isInside(r, realPath));
+}
+
 /** Describes the allowlist for messages and `doctor`. */
 export function describeRoots(): { mode: "configured" | "default" | "any"; roots: string[] } {
   if (rootsEnv().length > 0) return { mode: "configured", roots: rootsEnv() };

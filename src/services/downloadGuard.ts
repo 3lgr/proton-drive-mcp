@@ -2,7 +2,8 @@
 // Fail closed throughout: any error refuses the call, promotes nothing and removes the staging directory.
 //   1. precheck   - the item's own name and the exact local target go through the local path policy.
 //   2. enumerate  - a folder is listed in full; every descendant name must be one plain path component.
-//   3. stage      - the CLI downloads into a fresh 0700 directory BESIDE the destination, never into it.
+//   3. stage      - the CLI downloads into a fresh 0700 directory inside the allowed root's private
+//                   .pdmcp-staging folder (beside the destination when there is no allowlist), never into it.
 //   4. scan       - lstat only (links are never followed): names, collisions, hardlinks, limits; modes normalised.
 //   5. plan       - planDownload() (pure, downloadPlan.ts) returns the exact allowed actions or throws.
 //   6. execute    - only those actions run, on the destination resolved once with realpath.native; files move
@@ -15,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
-import { assertLocalPathAllowed } from "../utils/localguard.js";
+import { assertLocalPathAllowed, allowedRootFor } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
 import { strMarker } from "../utils/safeOutput.js";
 import { approvalField } from "../policy/untrusted.js";
@@ -130,10 +131,32 @@ function ensurePrivateDir(dir: string): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
-/** A fresh 0700 directory beside `realDest` (same filesystem => atomic rename), else in the OS temp dir. */
+export const STAGING_DIR_NAME = ".pdmcp-staging";
+
+/**
+ * The private folder (0700, ours) inside the allowed root that holds `realDest`. Staging beside the destination
+ * would land in the root's PARENT (often $HOME) when the destination is the root itself.
+ */
+function stagingFolderInRoot(realDest: string): string | undefined {
+  const root = allowedRootFor(realDest);
+  if (!root) return undefined;
+  const dir = join(root, STAGING_DIR_NAME);
+  try { mkdirSync(dir, { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") return undefined; }
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink()) return undefined;
+  if (typeof process.getuid === "function" && st.uid !== process.getuid()) return undefined;
+  chmodSync(dir, 0o700);
+  return dir;
+}
+
+/**
+ * A fresh 0700 directory: inside the allowed root's private staging folder (same filesystem => atomic rename);
+ * without an allowlist, beside `realDest`; as a last resort in the OS temp dir.
+ */
 function makeStaging(realDest: string): string {
   let dir: string;
-  try { dir = mkdtempSync(join(dirname(realDest), ".pdmcp-stage-")); }
+  const inRoot = stagingFolderInRoot(realDest);
+  try { dir = inRoot ? mkdtempSync(join(inRoot, "pdmcp-stage-")) : mkdtempSync(join(dirname(realDest), ".pdmcp-stage-")); }
   catch { dir = mkdtempSync(join(tmpdir(), "pdmcp-stage-")); }
   chmodSync(dir, 0o700);
   registerTempDir(dir);
