@@ -58,7 +58,13 @@ describe("docx regexes are linear on hostile input", () => {
 });
 
 const needBoth = await skipUnlessOptional("fflate", "unpdf");
-describe("PDF/DOCX parsing runs in a limited worker", needBoth, () => {
+// SIGKILL is delivered asynchronously: wait for the exit event instead of sampling right after the rejection.
+async function terminated(child) {
+  for (let i = 0; i < 100 && child.exitCode === null && child.signalCode === null; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(child.exitCode !== null || child.signalCode !== null, "parser process terminated");
+}
+
+describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
   let fflate;
   before(async () => { fflate = await loadOptional("fflate"); });
   const docx = (xml, extra = {}) => Buffer.from(fflate.zipSync({ "word/document.xml": new TextEncoder().encode(xml), ...extra }));
@@ -78,7 +84,7 @@ describe("PDF/DOCX parsing runs in a limited worker", needBoth, () => {
     await assert.rejects(read(fakeDrive({ node: pdfNode(), name: "b.pdf", bytes: bombPdf(4_000_000) }), "/b.pdf", {}, { worker }), /PDF is too large or complex to read safely/);
     assert.ok(process.memoryUsage().rss - rss0 < 1.5e9, "parent RSS stayed bounded");
     assert.equal(workers.length, 1);
-    assert.equal(workers[0].threadId, -1, "worker terminated");
+    await terminated(workers[0]);
     const ok = await read(fakeDrive({ node: pdfNode(), name: "a.pdf", bytes: makePdf("still alive") }), "/a.pdf");
     assert.match(ok.text, /still alive/);
   });
@@ -87,7 +93,7 @@ describe("PDF/DOCX parsing runs in a limited worker", needBoth, () => {
     const workers = [];
     await withEnv("PROTON_DRIVE_READ_TIMEOUT_MS", "50", () =>
       assert.rejects(read(fakeDrive({ node: pdfNode(), name: "b.pdf", bytes: bombPdf(300_000) }), "/b.pdf", {}, { worker: { onWorker: (w) => workers.push(w) } }), /PDF is too large or complex to read safely/));
-    assert.equal(workers[0].threadId, -1);
+    await terminated(workers[0]);
   });
 
   it("aborting the request terminates the worker", async () => {
@@ -96,7 +102,7 @@ describe("PDF/DOCX parsing runs in a limited worker", needBoth, () => {
     const p = callContext.run({ signal: ac.signal }, () =>
       read(fakeDrive({ node: pdfNode(), name: "b.pdf", bytes: bombPdf(300_000) }), "/b.pdf", {}, { worker: { timeoutMs: 60_000, onWorker: (w) => { workers.push(w); setTimeout(() => ac.abort(), 20); } } }));
     await assert.rejects(p, /cancelled/);
-    assert.equal(workers[0].threadId, -1);
+    await terminated(workers[0]);
   });
 
   it("stops collecting at the text cap and says so", async () => {
@@ -170,3 +176,39 @@ describe("stale temp-dir sweep", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+describe("the parser process is sandboxed (Node permission model, empty environment)", () => {
+  it("cannot write files, spawn processes, start workers or read outside the package; has no environment", async () => {
+    const evil = { worker: { moduleSpecifiers: { unpdf: new URL("./helpers/evil-parser.mjs", import.meta.url).href } } };
+    process.env.PDMCP_SECRET_PROBE = "must-not-leak";
+    let message = "";
+    try { await read(fakeDrive({ node: fileNode({ mediaType: "application/pdf" }), name: "a.pdf", bytes: makePdf("x") }), "/a.pdf", {}, evil); }
+    catch (e) { message = e.message; } finally { delete process.env.PDMCP_SECRET_PROBE; }
+    const m = message.match(/PROBE (\{.*\})/);
+    assert.ok(m, `the probe module must run inside the child: ${message}`);
+    const probe = JSON.parse(m[1]);
+    assert.equal(probe.write, "ERR_ACCESS_DENIED");
+    assert.equal(probe.spawn, "ERR_ACCESS_DENIED");
+    assert.equal(probe.readOutside, "ERR_ACCESS_DENIED");
+    assert.equal(probe.worker, "ERR_ACCESS_DENIED");
+    assert.ok(probe.envKeys.every((k) => !/PDMCP|SECRET|TOKEN|HOME|PATH/i.test(k)), `unexpected environment: ${probe.envKeys}`);
+    assert.ok(probe.envKeys.length <= 1);
+  });
+});
+
+describe("download size cap is enforced while downloading", () => {
+  it("a file that grows past the cap despite a small claimed size is stopped mid-transfer", async () => {
+    const { makeSandbox, startServer, nonVersionCalls } = await import("./helpers/mcp-client.mjs");
+    const sb = makeSandbox();
+    const c = await startServer("download-hang", sb, { PROTON_DRIVE_READ_MAX_BYTES: "50", FAKE_PARTIAL_BYTES: "5000" });
+    try {
+      const t0 = Date.now();
+      const r = await c.call("drive_read_content", { path: "/my-files/a.txt" }, { timeout: 20_000 });
+      assert.equal(r.isError, true);
+      assert.match(r.text, /passed the read cap of 50 bytes/);
+      assert.ok(Date.now() - t0 < 10_000, "stopped by the watcher, not by the 30 min transfer timeout");
+      assert.ok(nonVersionCalls(sb.argvLog).some((a) => a[1] === "download"));
+    } finally { await c.close(); sb.cleanup(); }
+  });
+});
+
