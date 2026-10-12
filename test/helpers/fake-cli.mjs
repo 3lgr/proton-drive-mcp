@@ -33,7 +33,7 @@ const mode = process.env.FAKE_MODE ?? "json";
 const isVersion = argv[0] === "version";
 
 if (process.env.FAKE_ARGV_LOG) {
-  appendFileSync(process.env.FAKE_ARGV_LOG, JSON.stringify({ argv, pid: process.pid }) + "\n");
+  appendFileSync(process.env.FAKE_ARGV_LOG, JSON.stringify({ argv, pid: process.pid, exe: process.argv[1] }) + "\n");
 }
 
 function hang() {
