@@ -1,6 +1,8 @@
 // Handlers: Sharing, public links and invitations.
 import { validateRemotePath, validateEmail, validateMessage, validateFlagValue } from "../../utils/validation.js";
 import { checkInvite, checkPublicLink } from "../../policy/sharePolicy.js";
+import { GATES } from "../../policy/gates.js";
+import { approvalField } from "../../policy/untrusted.js";
 import type { Handler } from "../context.js";
 import { ok, fail } from "../result.js";
 
@@ -28,10 +30,20 @@ export const sharingHandlers: Record<string, Handler> = {
   drive_list_invitations: async (_a, { drive }) => {
     return ok(await drive.listInvitations());
   },
-  drive_invitation_accept: async (a, { drive, gate }) => {
+  drive_invitation_accept: async (a, { drive, gate, canElicit }) => {
     if (typeof a.uid !== "string" || !a.uid) return fail("uid must be a non-empty string");
     const acceptUid = validateFlagValue(a.uid, "uid");
-    await gate("drive_invitation_accept", a);
+    // The human decides on what is being accepted, not on an opaque uid.
+    // (only a client that can show the prompt needs the lookup; others are refused or pass on prompt-level confirmed)
+    if (canElicit()) {
+      const inv = (await drive.listInvitations()).find((i) => i.uid === acceptUid);
+      if (!inv) return fail("No pending invitation with that uid. Call drive_list_invitations for the current ones.");
+      await gate("drive_invitation_accept", a,
+        `drive_invitation_accept needs your approval. It ${GATES.drive_invitation_accept!.consequence}\n` +
+        `from: ${approvalField(inv.invitedByEmail)}\nitem: ${approvalField(inv.nodeName)} (${inv.nodeType})\nrole: ${inv.role}\nuid: ${approvalField(acceptUid)}`);
+    } else {
+      await gate("drive_invitation_accept", a);
+    }
     await drive.invitationAccept(acceptUid);
     return ok({ message: "Invitation accepted." });
   },

@@ -137,7 +137,7 @@ export async function main() {
     }
 
     try {
-      const handler = HANDLERS[name];
+      const handler = Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : undefined;
       if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool ${strMarker(String(name))}`);
       return await handler(a, { drive, gate, canElicit, sharePolicy });
     } catch (err) {

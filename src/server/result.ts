@@ -44,7 +44,7 @@ export function presentResult(tool: string, r: ToolResult): ToolResult {
   if (r.isError) return text(sanitizeMessage(first.text));
   let parsed: unknown;
   try { parsed = JSON.parse(first.text); } catch { return text(sanitizeMessage(first.text)); }
-  if (tool in UNTRUSTED_TOOLS) return text(JSON.stringify(wrapUntrusted(tool, parsed)));
+  if (Object.hasOwn(UNTRUSTED_TOOLS, tool)) return text(JSON.stringify(wrapUntrusted(tool, parsed)));
   return text(JSON.stringify(sanitizeDeep(parsed, [], newStats())));
 }
 

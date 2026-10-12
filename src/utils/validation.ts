@@ -2,6 +2,8 @@ import { isAbsolute } from "node:path";
 import { domainToASCII } from "node:url";
 import { assertLocalPathAllowed } from "./localguard.js";
 
+const MAX_PATH_CHARS = 4096;
+
 // Control chars: 0x00-0x1F, DEL (0x7F), Unicode separators U+2028 and U+2029.
 const CONTROL_RE = new RegExp("[\\x00-\\x1f\\x7f\\u2028\\u2029]");
 
@@ -22,6 +24,7 @@ export function validatePath(path: unknown): string {
   if (!p.trim()) throw new Error("path must not be empty");
   if (p.startsWith("-")) throw new Error(`path must not start with '-': ${p}`);
   if (CONTROL_RE.test(p)) throw new Error("path contains control characters");
+  if (p.length > MAX_PATH_CHARS) throw new Error(`path is longer than ${MAX_PATH_CHARS} characters`);
   if (p.split("/").some((seg) => seg === ".." || seg === ".")) throw new Error(`path must not contain '.' or '..' segments: ${p}`);
   return p;
 }
@@ -31,7 +34,14 @@ export function validateRemotePath(path: unknown): string {
   if (!p.startsWith("/")) throw new Error(`remote path must be absolute (start with '/'): ${p}`);
   // "/a/b/" and "/a/b" are the same node; a trailing slash only confuses the
   // dirname/basename splitting done by mkdir/move and is echoed back verbatim.
-  return p.length > 1 ? p.replace(/\/+$/, "") || "/" : p;
+  // Trailing separators are dropped (linear, no regex); a literal slash inside a name is written "\/".
+  let end = p.length;
+  while (end > 1 && p[end - 1] === "/" && p[end - 2] !== "\\") end--;
+  // Empty segments ("//") inside the path would be read differently by this server and by the CLI: refuse.
+  for (let i = 1; i < end; i++) {
+    if (p[i] === "/" && p[i - 1] === "/" && !(i >= 2 && p[i - 2] === "\\")) throw new Error("remote path must not contain empty segments ('//')");
+  }
+  return end > 0 ? p.slice(0, end) : "/";
 }
 
 // Explicit path list for bulk tools: non-empty, capped, every entry a valid remote path.
