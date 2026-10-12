@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { WalkNode } from "./walk.js";
 import { logger } from "../utils/logger.js";
+import { envFlag } from "../utils/envFlag.js";
 
 /**
  * Opt-in on-disk copy of completed Drive walks (PROTON_DRIVE_INDEX=1). It holds
@@ -25,8 +26,7 @@ export interface IndexEntry {
 export interface IndexFile { version: number; accountKey: string; savedAt: number; entries: IndexEntry[] }
 
 export function indexEnabled(): boolean {
-  const v = (process.env.PROTON_DRIVE_INDEX ?? "").trim().toLowerCase();
-  return v === "1" || v === "true";
+  return envFlag("PROTON_DRIVE_INDEX");
 }
 
 export function indexDir(): string {

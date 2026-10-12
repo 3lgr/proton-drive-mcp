@@ -14,8 +14,8 @@ export const MAX_LINK_DAYS = 90; // Proton rejects links that expire further out
 export const MIN_LINK_PASSWORD = 8;
 
 export function loadSharePolicy(env: Readonly<Record<string, string | undefined>> = process.env): SharePolicy {
-  const raw = (env["PROTON_DRIVE_SHARE_POLICY"] ?? "strict").trim().toLowerCase();
-  const mode = raw === "off" ? "off" : "strict"; // anything unrecognised keeps the safe default
+  // Only the exact word "off" relaxes it; anything else (empty, "OFF", " off", "false", a typo) stays strict.
+  const mode = env["PROTON_DRIVE_SHARE_POLICY"] === "off" ? "off" : "strict";
   // Entries are compared as punycode, exactly. A leading dot (".corp.com") is the only way to also admit subdomains.
   const allowedDomains: string[] = [];
   for (const raw of (env["PROTON_DRIVE_SHARE_ALLOWED_DOMAINS"] ?? "").split(",")) {

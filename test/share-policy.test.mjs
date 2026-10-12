@@ -9,7 +9,9 @@ const NOW = new Date("2026-10-11T00:00:00Z");
 describe("sharePolicy (pure)", () => {
   it("defaults to strict; only 'off' disables; unknown values stay strict", () => {
     assert.equal(loadSharePolicy({}).mode, "strict");
-    assert.equal(loadSharePolicy({ PROTON_DRIVE_SHARE_POLICY: "OFF" }).mode, "off");
+    assert.equal(loadSharePolicy({ PROTON_DRIVE_SHARE_POLICY: "OFF" }).mode, "strict", "only the exact word off relaxes it");
+    assert.equal(loadSharePolicy({ PROTON_DRIVE_SHARE_POLICY: " off" }).mode, "strict");
+    assert.equal(loadSharePolicy({ PROTON_DRIVE_SHARE_POLICY: "off" }).mode, "off");
     assert.equal(loadSharePolicy({ PROTON_DRIVE_SHARE_POLICY: "loose" }).mode, "strict");
   });
   it("parses the domain allowlist (punycode, exact; leading dot = subdomains)", () => {

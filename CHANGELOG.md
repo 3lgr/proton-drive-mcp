@@ -6,6 +6,13 @@ First release of the `@3lgr/proton-drive-mcp` fork of googlarz/proton-drive-mcp 
 are unchanged. **This is a major version because several security behaviours changed; read "Breaking changes".**
 
 ### Breaking changes
+- **Opt-out switches are parsed strictly.** `PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH`, `PROTON_DRIVE_ALLOW_SENSITIVE_PATHS`,
+  `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE` and `PROTON_DRIVE_INDEX` are on only for exactly `1` or `true`;
+  `PROTON_DRIVE_SHARE_POLICY` relaxes only for exactly `off` (so `OFF` stays strict). `doctor` lists every active opt-out.
+- **One registry, one dispatcher** (`src/server/policy.ts`, `src/server/dispatch.ts`): every tool declares its class,
+  consent mode and local-path arguments; the dispatcher enforces the local allowlist and, for 15 tools, validation and
+  the confirmation gate, before the handler runs. Startup fails if a tool has no policy, handler or gate entry. Handlers
+  that touch the drive without evaluating their gate are stopped by a guarded drive object.
 - **Irreversible or outward-facing tools fail closed** when the MCP client cannot ask the human (no elicitation):
   `drive_empty_trash`, `drive_delete`, `drive_share_invite|revoke|set_url|remove_url|remove_all|leave`,
   `drive_auth_logout`, `photos_delete_album`, `drive_invitation_accept|reject`, and the `remove` strategy of

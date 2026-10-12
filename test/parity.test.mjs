@@ -155,7 +155,12 @@ describe("environment variable parity", () => {
     });
   }
   const src = walk(join(ROOT, "src")).map((p) => readFileSync(p, "utf8")).join("\n");
-  const reads = new Set([...src.matchAll(/process\.env\["([A-Z0-9_]+)"\](?!\s*=[^=])/g)].map((m) => m[1]));
+  // process.env["X"] reads, envFlag("X") reads, and the named constants (const X_ENV = "PROTON_DRIVE_...")
+  const reads = new Set([
+    ...[...src.matchAll(/process\.env\["([A-Z0-9_]+)"\](?!\s*=[^=])/g)].map((m) => m[1]),
+    ...[...src.matchAll(/envFlag\("([A-Z0-9_]+)"/g)].map((m) => m[1]),
+    ...[...src.matchAll(/_ENV(?::\s*string)?\s*=\s*"(PROTON_DRIVE_[A-Z0-9_]+)"/g)].map((m) => m[1]),
+  ]);
   const internal = new Set([...src.matchAll(/process\.env\["([A-Z0-9_]+)"\]\s*=[^=]/g)].map((m) => m[1]));
 
   it("finds the env vars the code reads", () => {

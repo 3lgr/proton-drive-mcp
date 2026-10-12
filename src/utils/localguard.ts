@@ -3,6 +3,7 @@ import { realpathSync, lstatSync, mkdirSync, readlinkSync, statSync } from "node
 // realpathSync.native asks the OS, so it also returns the on-disk case of every existing component.
 const realpath = realpathSync.native;
 import { homedir } from "node:os";
+import { envFlag } from "./envFlag.js";
 import { resolve, dirname, basename, join, relative, isAbsolute, sep, delimiter } from "node:path";
 
 const HOME_DENY = [
@@ -81,7 +82,7 @@ function realResolve(p: string, depth = 0): string {
 
 /** True unless PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1. A LOCAL_ROOT allowlist narrows access further; it never switches the denylist off. */
 function denylistEnabled(): boolean {
-  return process.env["PROTON_DRIVE_ALLOW_SENSITIVE_PATHS"] !== "1";
+  return !envFlag("PROTON_DRIVE_ALLOW_SENSITIVE_PATHS");
 }
 
 /** The protected locations as absolute paths (lexical and resolved). Independent of any opt-out. */
@@ -118,7 +119,7 @@ export const ANY_LOCAL_ENV = "PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH";
 export const DEFAULT_ROOT_NAME = "ProtonDriveMCP";
 
 export function anyLocalPathAllowed(): boolean {
-  return process.env[ANY_LOCAL_ENV] === "1";
+  return envFlag(ANY_LOCAL_ENV);
 }
 
 /**

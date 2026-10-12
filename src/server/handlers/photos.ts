@@ -27,10 +27,8 @@ export const photosHandlers: Record<string, Handler> = {
     await drive.updateAlbum(updateAlbumPath, newName, coverPhotoUid);
     return ok({ message: `Album updated: ${newName ? `/albums/${newName}` : updateAlbumPath}` });
   },
-  photos_delete_album: async (a, { drive, gate }) => {
-    const albumDelPath = validateRemotePath(a.albumPath);
-    if (!albumDelPath.startsWith("/albums/")) return fail("albumPath must start with /albums/");
-    await gate("photos_delete_album", a);
+  photos_delete_album: async (a, { drive }) => {
+    const albumDelPath = a.albumPath as string;
     await drive.deleteAlbum(albumDelPath, a.force === true, a.save === true);
     return ok({ message: `Album deleted: ${albumDelPath}` });
   },
@@ -47,14 +45,9 @@ export const photosHandlers: Record<string, Handler> = {
     await drive.addPhotoToAlbum(addAlbumPath, addPhotoPath);
     return ok({ message: `Added ${addPhotoPath} to ${addAlbumPath}` });
   },
-  photos_remove_from_album: async (a, { drive, gate }) => {
-    const remAlbumPath = validateRemotePath(a.albumPath);
-    const remPhotoPath = validateRemotePath(a.photoPath);
-    if (!remAlbumPath.startsWith("/albums/")) return fail("albumPath must start with /albums/");
-    if (!remPhotoPath.startsWith("/photos/")) return fail("photoPath must start with /photos/");
-    await gate("photos_remove_from_album", a);
-    await drive.removePhotoFromAlbum(remAlbumPath, remPhotoPath);
-    return ok({ message: `Removed ${remPhotoPath} from ${remAlbumPath}` });
+  photos_remove_from_album: async (a, { drive }) => {
+    await drive.removePhotoFromAlbum(a.albumPath as string, a.photoPath as string);
+    return ok({ message: `Removed ${a.photoPath as string} from ${a.albumPath as string}` });
   },
   photos_list_timeline: async (a, { drive }) => {
     return ok(paginate((await drive.photoTimeline(a.loadDetails === true)).sort(photoOrder), a, PAGE_DEFAULTS.photos_list_timeline));
