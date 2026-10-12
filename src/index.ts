@@ -38,7 +38,7 @@ import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/a
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
-import { assertUploadTreeClean } from "./utils/uploadScan.js";
+import { precheckUpload, withUploadSnapshot } from "./services/uploadSnapshot.js";
 import {
   freezeDownload, freezePhotoDownload, precheckDownload, precheckPhotoDownload, safeDownload, safePhotoDownload, describeDownload, describePhotoDownload,
 } from "./services/downloadGuard.js";
@@ -1287,10 +1287,11 @@ export async function main() {
           const fcs = parseStrategy(a.fileConflictStrategy, UPLOAD_FILE_STRATEGIES, "fileConflictStrategy", "skip");
           const dcs2 = parseStrategy(a.folderConflictStrategy, UPLOAD_FOLDER_STRATEGIES, "folderConflictStrategy", "skip");
           const uploadLocal = validateLocalPath(a.localPath, { scan: true });
-          assertUploadTreeClean(uploadLocal);
+          precheckUpload(uploadLocal); // F-04: refuse secrets/links/special files before a human is asked
           const uploadRemote = validateRemotePath(a.remotePath);
           await gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 });
-          const uploadResult = await drive.upload(uploadLocal, uploadRemote, fcs, dcs2, a.skipThumbnails === true);
+          // The CLI uploads a private snapshot of the validated tree, never the original path.
+          const uploadResult = await withUploadSnapshot([uploadLocal], ([snap]) => drive.upload(snap as string, uploadRemote, fcs, dcs2, a.skipThumbnails === true));
           if (uploadResult.failed > 0) {
             return fail(`Upload completed with ${uploadResult.failed} failed file(s). uploaded=${uploadResult.uploaded} skipped=${uploadResult.skipped}`);
           }
@@ -1588,9 +1589,9 @@ export async function main() {
         case "photos_upload": {
           if (!Array.isArray(a.localPaths) || a.localPaths.length === 0) return fail("localPaths must be a non-empty array of strings");
           const uploadPaths = a.localPaths.map((p) => validateLocalPath(p, { scan: true }));
-          uploadPaths.forEach((p) => assertUploadTreeClean(p));
+          uploadPaths.forEach((p) => precheckUpload(p));
           const pucs = parseStrategy(a.conflictStrategy, PHOTO_UPLOAD_STRATEGIES, "conflictStrategy", "skip");
-          const uploadSummary = await drive.photoUpload(uploadPaths, pucs);
+          const uploadSummary = await withUploadSnapshot(uploadPaths, (snaps) => drive.photoUpload(snaps, pucs));
           if (uploadSummary.failedItems > 0) {
             return fail(`Upload completed with ${uploadSummary.failedItems} failed item(s). transferred=${uploadSummary.transferredItems}`);
           }
