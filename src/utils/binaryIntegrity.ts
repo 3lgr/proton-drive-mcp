@@ -24,16 +24,21 @@ export function binaryPath(): string {
   return resolveBinary(configuredBinary()) ?? configuredBinary();
 }
 
-/** Lower-case 64-hex pin, undefined when unset; throws on a malformed value (fail closed, never ignored). */
-export function expectedSha256(): string | undefined {
-  const raw = process.env[HASH_ENV];
+/** Lower-case 64-hex pin from a raw value, undefined when blank; throws on a malformed value (fail closed, never ignored). */
+export function parseSha256(raw: string | undefined): string | undefined {
   if (raw === undefined || raw.trim() === "") return undefined;
   const v = raw.trim().toLowerCase().replace(/^sha256:/, "");
   if (!/^[0-9a-f]{64}$/.test(v)) throw new DriveCliError(`${HASH_ENV} must be 64 hexadecimal characters (sha256 of the proton-drive binary)`);
   return v;
 }
 
-function hashFile(path: string): Promise<string> {
+/** The process's own pin (PROTON_DRIVE_BIN_SHA256), undefined when unset. */
+export function expectedSha256(): string | undefined {
+  return parseSha256(process.env[HASH_ENV]);
+}
+
+/** Lower-case hex sha256 of a file's bytes. */
+export function sha256File(path: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const h = createHash("sha256");
     createReadStream(path).on("data", (d) => h.update(d)).on("error", reject).on("end", () => resolve(h.digest("hex")));
@@ -61,7 +66,7 @@ async function makeVerifiedCopy(source: string, want: string): Promise<PrivateCo
     return fail(`${HASH_ENV} is set but the binary at ${source} could not be copied for verification; refusing to run it`);
   }
   let got: string;
-  try { got = await hashFile(dest); } catch { return fail("the verified copy of the proton-drive binary could not be read; refusing to run it"); }
+  try { got = await sha256File(dest); } catch { return fail("the verified copy of the proton-drive binary could not be read; refusing to run it"); }
   if (got !== want) return fail(`the proton-drive binary at ${source} does not match ${HASH_ENV} (got ${got.slice(0, 12)}…); refusing to run it`);
   chmodSync(dest, 0o500);
   const st = lstatSync(dest);
@@ -87,7 +92,7 @@ export async function trustedBinary(): Promise<string> {
     copying = undefined;
     throw new DriveCliError("the verified copy of the proton-drive binary was modified; refusing to run it");
   }
-  if (await hashFile(c.path) !== want) { copying = undefined; throw new DriveCliError("the verified copy of the proton-drive binary no longer matches the pin; refusing to run it"); }
+  if (await sha256File(c.path) !== want) { copying = undefined; throw new DriveCliError("the verified copy of the proton-drive binary no longer matches the pin; refusing to run it"); }
   return c.path;
 }
 
