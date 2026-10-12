@@ -98,6 +98,10 @@ export function sanitizeString(s: string, opts: { text?: boolean; cap?: number }
     const ch = input.slice(i, i + width);
     i += width;
     if (cp >= 0x20 && cp <= 0x7e) { flush(); out += ch; continue; }
+    // glyphs we use for our own markers can not be produced by content (it would forge a "sanitizer" marker)
+    if (cp === 0x27e6) { flush(); out += "[|"; continue; }
+    if (cp === 0x27e7) { flush(); out += "|]"; continue; }
+    if (cp === 0x2026) { flush(); out += "..."; continue; }
     if (opts.text && (cp === 0x0a || cp === 0x09)) { flush(); out += ch; continue; }
     if (opts.text && cp === 0x0d) { flush(); if (input.charCodeAt(i) !== 0x0a) out += "\n"; continue; } // CRLF -> LF
     if (cp > 0x7e && SPACE_ONE.test(ch) && !REMOVE_ONE.test(ch)) { flush(); out += " "; continue; }
@@ -118,6 +122,8 @@ export function sanitizeString(s: string, opts: { text?: boolean; cap?: number }
     truncated = true;
     out += `…[truncated ${Math.max(remaining, 1)} chars]`;
   }
+  // last step, on the final text: delimiter look-alikes (including those created by NFKC) are defanged
+  out = neutraliseMarkers(out);
   if (stats) {
     if (out !== s) stats.changed++;
     if (truncated) stats.truncated = true;
@@ -126,28 +132,36 @@ export function sanitizeString(s: string, opts: { text?: boolean; cap?: number }
   return out;
 }
 
-/** Removes lookalikes of our own delimiters from free text. Linear: anchored on the literal word, bounded windows. */
+const LT = "\u2039"; // single left-pointing angle quotation mark
+const GT = "\u203a";
+
+/**
+ * Defangs lookalikes of our own delimiter, on the FINAL text: around every occurrence of the word (any case) the
+ * angle brackets in a bounded window are replaced by look-alike quotation marks, so "<<<...UNTRUSTED...>>>" can not
+ * exist in the output whatever was in the input, and replacing characters (never deleting segments) can not create
+ * a new match. Linear: one search for the word, bounded windows, one rebuild.
+ */
 export function neutraliseMarkers(text: string): string {
-  const word = "UNTRUSTED";
-  let from = 0;
-  let out = "";
-  let at = text.indexOf(word, from);
-  while (at !== -1) {
-    // Bounded windows on both sides: no scan may run to the end of the text.
-    const winStart = Math.max(from, at - 100);
-    const before = text.slice(winStart, at).lastIndexOf("<<<");
-    const open = before === -1 ? -1 : winStart + before;
-    const afterRel = text.slice(at, at + 170).indexOf(">>>");
-    const close = afterRel === -1 ? -1 : at + afterRel;
-    if (open !== -1 && close !== -1) {
-      out += `${text.slice(from, open)}[marker removed]`;
-      from = close + 3;
-      at = text.indexOf(word, from);
-    } else {
-      at = text.indexOf(word, at + word.length);
-    }
+  if (text.length < 9) return text;
+  const BEFORE = 110;
+  const AFTER = 180;
+  const ranges: Array<[number, number]> = [];
+  const word = /untrusted/gi; // indexes stay valid: no case-mapping of the text itself
+  for (let m = word.exec(text); m !== null; m = word.exec(text)) {
+    const at = m.index;
+    const start = Math.max(0, at - BEFORE);
+    const end = Math.min(text.length, at + 9 + AFTER);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end); else ranges.push([start, end]);
   }
-  return out + text.slice(from);
+  if (ranges.length === 0) return text;
+  let out = "";
+  let pos = 0;
+  for (const [start, end] of ranges) {
+    out += text.slice(pos, start) + text.slice(start, end).replaceAll("<", LT).replaceAll(">", GT);
+    pos = end;
+  }
+  return out + text.slice(pos);
 }
 
 /** Deep copy of JSON data with every string sanitised, under one budget. Keys named in `textFields` are free text. */
@@ -156,8 +170,7 @@ export function sanitizeDeep(value: unknown, textFields: readonly string[], stat
   if (typeof value === "string") {
     if (stats.chars > BUDGET_CHARS) { stats.truncated = true; return "[omitted: response too large]"; }
     const text = key !== undefined && textFields.includes(key);
-    let r = sanitizeString(value, { text }, stats);
-    if (text) r = neutraliseMarkers(r);
+    const r = sanitizeString(value, { text }, stats);
     stats.chars += r.length;
     return r;
   }
@@ -216,7 +229,7 @@ export function wrapUntrusted(tool: string, data: unknown): Envelope {
 
 /** Error text: bounded, no control/hidden characters (markers instead). */
 export function sanitizeMessage(message: string, cap = 600): string {
-  return neutraliseMarkers(sanitizeString(message, { text: true, cap })).replace(/\n{3,}/g, "\n\n");
+  return sanitizeString(message, { text: true, cap }).replace(/\n{3,}/g, "\n\n");
 }
 
 /**
