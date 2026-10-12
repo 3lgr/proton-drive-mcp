@@ -37,6 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
+import { UNTRUSTED_TOOLS, wrapUntrusted, sanitizeMessage } from "./policy/untrusted.js";
 import { loadSharePolicy, checkInvite, checkPublicLink } from "./policy/sharePolicy.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
 import { precheckUpload, withUploadSnapshot } from "./services/uploadSnapshot.js";
@@ -84,6 +85,19 @@ function handleError(err: unknown): ToolResult {
   if (err instanceof DriveParseError) return fail(`Parse error: ${err.message}`);
   if (err instanceof Error) return fail(truncate(err.message));
   return fail(`Unexpected error: ${truncate(String(err))}`);
+}
+
+// F-07: text written by other people travels inside an envelope, sanitised; error text is cleaned too.
+function presentResult(tool: string, r: ToolResult): ToolResult {
+  const first = r.content[0];
+  if (!first) return r;
+  if (r.isError) return { ...r, content: [{ type: "text", text: sanitizeMessage(first.text) }] };
+  if (!(tool in UNTRUSTED_TOOLS)) return r;
+  try {
+    return { ...r, content: [{ type: "text", text: JSON.stringify(wrapUntrusted(tool, JSON.parse(first.text))) }] };
+  } catch {
+    return r; // not JSON: nothing structured to wrap
+  }
 }
 
 function paginate<T>(all: T[], a: Record<string, unknown>, defaultLimit: number) {
@@ -1645,7 +1659,8 @@ export async function main() {
     try {
       // The request's AbortSignal reaches the CLI child via AsyncLocalStorage, so
       // notifications/cancelled actually kills a running upload/download.
-      return await callContext.run({ signal: extra?.signal }, () => handleCall(req));
+      const result = await callContext.run({ signal: extra?.signal }, () => handleCall(req));
+      return presentResult(req.params.name, result);
     } finally {
       inFlight--;
     }

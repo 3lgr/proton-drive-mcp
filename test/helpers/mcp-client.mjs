@@ -158,8 +158,11 @@ export class McpClient {
     if (res.error) throw new Error(`JSON-RPC error ${res.error.code}: ${res.error.message}`);
     const text = res.result.content?.[0]?.text ?? "";
     let data;
+    let envelope;
     try { data = JSON.parse(text); } catch { data = undefined; }
-    return { isError: res.result.isError === true, text, data };
+    // F-07: results carrying Drive-originated text come wrapped; most tests care about the payload.
+    if (data && data.untrusted === true && "content" in data) { envelope = data; data = data.content; }
+    return { isError: res.result.isError === true, text, data, envelope };
   }
 
   kill(signal = "SIGKILL") {
