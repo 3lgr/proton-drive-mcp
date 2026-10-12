@@ -1291,9 +1291,19 @@ export async function main() {
           const uploadLocal = validateLocalPath(a.localPath, { scan: true });
           const approvedUpload = precheckUpload(uploadLocal); // F-04: refuse secrets/links/special files before a human is asked
           const uploadRemote = validateRemotePath(a.remotePath);
-          await gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 });
-          // The CLI uploads a private snapshot of the validated tree, never the original path.
-          const uploadResult = await withUploadSnapshot([uploadLocal], ([snap]) => drive.upload(snap as string, uploadRemote, fcs, dcs2, a.skipThumbnails === true), { approved: [approvedUpload] });
+          // The CLI uploads a private, frozen snapshot of the validated tree, never the original path. The gate (when
+          // it applies) approves the snapshot's own manifest; the snapshot is re-hashed after the answer.
+          const uploadResult = await withUploadSnapshot(
+            [uploadLocal],
+            ([snap]) => drive.upload(snap as string, uploadRemote, fcs, dcs2, a.skipThumbnails === true),
+            {
+              approved: [approvedUpload],
+              approve: (m) => gate("drive_upload", { ...a, fileConflictStrategy: fcs, folderConflictStrategy: dcs2 },
+                `drive_upload needs your approval. It ${GATES.drive_upload!.consequence}\n` +
+                `Sending ${m.files} file(s), ${m.bytes} bytes from ${showValue(uploadLocal)} to ${showValue(uploadRemote)} (content digest ${m.digest.slice(0, 16)})\n` +
+                `fileConflictStrategy: ${fcs}\nfolderConflictStrategy: ${dcs2}`),
+            },
+          );
           if (uploadResult.failed > 0) {
             return fail(`Upload completed with ${uploadResult.failed} failed file(s). uploaded=${uploadResult.uploaded} skipped=${uploadResult.skipped}`);
           }
@@ -1374,19 +1384,13 @@ export async function main() {
           return ok(await drive.shareStatus(validateRemotePath(a.path)));
 
         case "drive_share_invite": {
-          const email = validateEmail(a.email);
-          if (typeof a.role !== "string") {
-            return fail("role must be a string: viewer, editor, or admin");
-          }
-          const role = a.role;
-          if (!["viewer", "editor", "admin"].includes(role)) {
-            return fail("role must be viewer, editor, or admin");
-          }
-          const inviteMsg = typeof a.message === "string" ? validateMessage(a.message) : undefined;
+          if (typeof a.role !== "string") return fail("role must be a string: viewer, editor, or admin");
           const invitePath = validateRemotePath(a.path);
-          checkInvite(sharePolicy, email, role); // F-06
-          await gate("drive_share_invite", a);
-          await drive.shareInvite(invitePath, email, role as "viewer" | "editor" | "admin", inviteMsg);
+          // F-06: one strict parse; the canonical e-mail and lower-case role are what is shown, checked and sent.
+          const { email, role } = checkInvite(sharePolicy, validateEmail(a.email), a.role);
+          const inviteMsg = typeof a.message === "string" ? validateMessage(a.message) : undefined;
+          await gate("drive_share_invite", { ...a, email, role });
+          await drive.shareInvite(invitePath, email, role, inviteMsg);
           return ok({ message: `Invited ${email} as ${role}.` });
         }
 

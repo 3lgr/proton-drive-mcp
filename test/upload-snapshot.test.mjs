@@ -1,7 +1,7 @@
 // F-04: uploads run from a validated private snapshot; any doubt refuses and nothing is sent.
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync, chmodSync, utimesSync, readdirSync, readFileSync, existsSync, renameSync, unlinkSync, appendFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync, chmodSync, utimesSync, readdirSync, readFileSync, existsSync, renameSync, unlinkSync, appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, basename, dirname } from "node:path";
@@ -70,7 +70,7 @@ describe("upload tools send a snapshot", () => {
     assert.equal(capture.files["a.txt"].content, "alpha");
     assert.equal(capture.files["sub/b.txt"].content, "beta");
     assert.equal(Math.round(capture.files["a.txt"].mtimeMs / 1000), Math.round(when.getTime() / 1000));
-    assert.equal(capture.files["a.txt"].mode, 0o600);
+    assert.equal(capture.files["a.txt"].mode, 0o400, "the snapshot is read-only");
     assert.equal(existsSync(capture.path), false, "snapshot removed");
     assert.equal(snapshotsLeft().length, 0);
   });
@@ -119,6 +119,9 @@ describe("upload tools send a snapshot", () => {
     } finally { await c.close(); sb.cleanup(); }
   });
 });
+
+// The snapshot is frozen read-only; a tamper simulation first behaves like a same-user attacker who thaws it.
+const thaw = (p) => { const st = lstatSync(p); if (st.isDirectory()) { chmodSync(p, 0o700); for (const n of readdirSync(p)) thaw(join(p, n)); } else if (st.isFile()) chmodSync(p, 0o600); };
 
 describe("snapshot integrity: approval, copy and spawn (fault injection)", () => {
   let base;
@@ -200,10 +203,57 @@ describe("snapshot integrity: approval, copy and spawn (fault injection)", () =>
     it(`the snapshot tampered before spawn (${label}) is refused`, async () => {
       const root = mk();
       const before = stagesLeft();
-      const r = await attempt(root, { hooks: { beforeSpawn: ([snap]) => tamper(snap) } });
+      const r = await attempt(root, { hooks: { beforeSpawn: ([snap]) => { thaw(snap); tamper(snap); } } });
       assert.match(String(r.error), match);
       assert.equal(r.reached, false);
       assert.equal(stagesLeft(), before, "staging removed");
     });
   }
+
+  // ---- approval is bound to the frozen manifest ----
+  it("approve() receives count, bytes and a content digest; the snapshot is read-only at that point", async () => {
+    const root = mk();
+    let seen;
+    let writeError;
+    await withUploadSnapshot([root], async () => 1, { approve: async (m) => { seen = m; }, hooks: { beforeSpawn: ([snap]) => { try { writeFileSync(join(snap, "a.txt"), "x"); } catch (e) { writeError = e; } } } });
+    assert.equal(seen.files, 2);
+    assert.equal(seen.bytes, "alpha".length + "beta".length);
+    assert.match(seen.digest, /^[0-9a-f]{64}$/);
+    if (process.getuid?.() !== 0) assert.equal(writeError?.code, "EACCES");
+  });
+
+  it("the digest follows the content: same tree same digest, different bytes different digest", async () => {
+    const a = mk(); const b = mk();
+    const digest = async (root) => { let d; await withUploadSnapshot([root], async () => 1, { approve: async (m) => { d = m.digest; } }); return d; };
+    assert.equal(await digest(a), await digest(a));
+    writeFileSync(join(b, "a.txt"), "ALPHA");
+    assert.notEqual(await digest(a), await digest(b));
+  });
+
+  it("a snapshot altered while approval is pending is refused (approval is not reusable)", async () => {
+    const root = mk();
+    let reached = false;
+    await assert.rejects(
+      withUploadSnapshot([root], async () => { reached = true; }, { hooks: { beforeSpawn: ([snap]) => { thaw(snap); writeFileSync(join(snap, "a.txt"), "ALPHA"); } } }),
+      /modified|changed after it was approved/);
+    assert.equal(reached, false);
+  });
+
+  it("entries added or removed during approval are refused", async () => {
+    for (const mutate of [(s) => writeFileSync(join(s, "new.txt"), "x"), (s) => unlinkSync(join(s, "sub", "b.txt"))]) {
+      const root = mk();
+      let reached = false;
+      await assert.rejects(withUploadSnapshot([root], async () => { reached = true; }, { hooks: { beforeSpawn: ([s]) => { thaw(s); mutate(s); } } }), /modified/);
+      assert.equal(reached, false);
+    }
+  });
+
+  it("a refusing approve() stops the upload and removes the staging directory", async () => {
+    const root = mk();
+    const before = stagesLeft();
+    let reached = false;
+    await assert.rejects(withUploadSnapshot([root], async () => { reached = true; }, { approve: async () => { throw new Error("user said no"); } }), /user said no/);
+    assert.equal(reached, false);
+    assert.equal(stagesLeft(), before);
+  });
 });

@@ -133,4 +133,16 @@ describe("elicitation support: the human is asked even when the model says confi
     assert.match(msg, /PERMANENTLY deletes/);
     assert.match(msg, /\/trash\/a\.txt/);
   });
+
+  it("the upload prompt summarises the frozen snapshot: file count, bytes, destination, content digest", async () => {
+    let msg = "";
+    await withElicitingClient(async (req) => { msg = req.params.message; return { action: "accept", content: { approve: true } }; }, async (client, sb) => {
+      const r = await client.callTool({ name: "drive_upload", arguments: { localPath: UPLOAD_SRC, remotePath: "/my-files/dest", fileConflictStrategy: "replace", confirmed: true } });
+      assert.notEqual(r.isError, true, text(r));
+      assert.ok(nonVersionCalls(sb.argvLog).some((a) => a[1] === "upload"));
+    });
+    assert.match(msg, /Sending 1 file\(s\), 1 bytes/);
+    assert.match(msg, /\/my-files\/dest/);
+    assert.match(msg, /content digest [0-9a-f]{16}/);
+  });
 });
