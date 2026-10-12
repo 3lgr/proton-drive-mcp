@@ -57,6 +57,9 @@ export function fakeEnv(mode, sandbox, extra = {}) {
   return {
     ...env,
     PROTON_DRIVE_BIN: FAKE_CLI,
+    // Most suites exercise tool behaviour, not the consent policy: they run as an operator who opted in to
+    // unattended destructive tools. Policy suites override this (extra) or run a client with elicitation.
+    PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE: "1",
     FAKE_MODE: mode,
     FAKE_ARGV_LOG: sandbox.argvLog,
     FAKE_PIDFILE: sandbox.pidFile,

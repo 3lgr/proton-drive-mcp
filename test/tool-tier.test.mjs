@@ -44,8 +44,9 @@ describe("tool tier", () => {
 
   // +100 each in 1.4.0: one sentence in drive_search explaining stale:true (persistent index).
   // drive_read_content (+~800 bytes, also in core).
+  // +~600 in 2.0.0: drive_invitation_accept is now gated (confirmed property + description).
   it("tools/list stays within the size budget", () => {
-    assert.ok(size(full) <= 40_200, `full ${size(full)} bytes`);
+    assert.ok(size(full) <= 41_000, `full ${size(full)} bytes`);
     assert.ok(size(core) <= 18_000, `core ${size(core)} bytes`);
   });
 

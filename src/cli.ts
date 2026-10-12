@@ -8,15 +8,7 @@
  * Run with --help (or see usage() below) for the full command list.
  */
 
-import {
-  DriveService,
-  type FileConflictStrategy,
-  type FolderConflictStrategy,
-  type FileDownloadConflictStrategy,
-  type FolderDownloadConflictStrategy,
-  type PhotoUploadConflictStrategy,
-  type PhotoDownloadConflictStrategy,
-} from "./services/drive.js";
+import { DriveService } from "./services/drive.js";
 import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, DriveParseError } from "./utils/errors.js";
 import { checkCliAvailable } from "./utils/subprocess.js";
 import { runDoctor, formatDoctor } from "./utils/doctor.js";
@@ -29,6 +21,11 @@ import { driveSearch, driveTree } from "./services/find.js";
 import { readDriveContent } from "./services/content.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { validateRemotePath, validateRemotePathList, validateLocalPath, validateEmail, validateMessage, validateName, validateFlagValue } from "./utils/validation.js";
+import { GATES, type Args } from "./policy/gates.js";
+import {
+  UPLOAD_FILE_STRATEGIES, UPLOAD_FOLDER_STRATEGIES, DOWNLOAD_FILE_STRATEGIES, DOWNLOAD_FOLDER_STRATEGIES,
+  PHOTO_UPLOAD_STRATEGIES, PHOTO_DOWNLOAD_STRATEGIES, humanList,
+} from "./policy/strategies.js";
 
 const drive = new DriveService();
 const args = process.argv.slice(2);
@@ -153,6 +150,24 @@ function numFlag(flag: string): number | undefined {
 
 function numFlags(...names: string[]): Record<string, number | undefined> {
   return Object.fromEntries(names.map((n) => [n, numFlag(`--${n}`)]));
+}
+
+// Human-typed commands need no model-consent plumbing, only the --confirm flag; which commands need it, and
+// why, comes from the same gate table the MCP server uses (src/policy/gates.ts).
+function requireConfirmFlag(tool: string, a: Args, target?: string): void {
+  const g = GATES[tool];
+  if (!g || !g.cliConfirm || !g.applies({ ...a, confirmed: true }) || args.includes("--confirm")) return;
+  console.error(`This ${g.consequence.replace(/^with strategy '([^']+)'/, "(strategy '$1')").replace(/^with conflictStrategy '([^']+)'/, "(strategy '$1')")}${target ? `\nTarget: ${target}` : ""}\nPass --confirm to proceed.`);
+  process.exit(1);
+}
+
+function choice<T extends string>(flag: string, allowed: readonly T[], fallback: T): T {
+  const raw = getFlag(flag) ?? fallback;
+  if (!(allowed as readonly string[]).includes(raw)) {
+    console.error(`Invalid ${flag} value: ${raw}. Must be ${humanList(allowed)}.`);
+    process.exit(1);
+  }
+  return raw as T;
 }
 
 function print(data: unknown) {
@@ -282,26 +297,10 @@ async function run() {
       try { local = validateLocalPath(rawLocal, { scan: true }); }
       catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); return; }
       const remote = requirePath(rest[0], "upload <local> <remote>");
-      const fileConflictRaw = getFlag("--file-conflict") ?? "skip";
-      if (!["skip", "create-new-revision", "rename", "replace"].includes(fileConflictRaw)) {
-        console.error(`Invalid --file-conflict value: ${fileConflictRaw}. Must be skip, create-new-revision, rename, or replace.`);
-        process.exit(1);
-      }
-      const folderConflictRaw = getFlag("--folder-conflict") ?? "skip";
-      if (!["skip", "merge", "rename", "replace"].includes(folderConflictRaw)) {
-        console.error(`Invalid --folder-conflict value: ${folderConflictRaw}. Must be skip, merge, rename, or replace.`);
-        process.exit(1);
-      }
-      if ((fileConflictRaw === "replace" || folderConflictRaw === "replace") && !args.includes("--confirm")) {
-        console.error("Strategy 'replace' trashes the existing remote item.\nPass --confirm to proceed.");
-        process.exit(1);
-      }
-      print(await drive.upload(
-        local, remote,
-        fileConflictRaw as FileConflictStrategy,
-        folderConflictRaw as FolderConflictStrategy,
-        args.includes("--skip-thumbnails")
-      ));
+      const fileConflictRaw = choice("--file-conflict", UPLOAD_FILE_STRATEGIES, "skip");
+      const folderConflictRaw = choice("--folder-conflict", UPLOAD_FOLDER_STRATEGIES, "skip");
+      requireConfirmFlag("drive_upload", { fileConflictStrategy: fileConflictRaw, folderConflictStrategy: folderConflictRaw });
+      print(await drive.upload(local, remote, fileConflictRaw, folderConflictRaw, args.includes("--skip-thumbnails")));
       break;
     }
 
@@ -312,25 +311,10 @@ async function run() {
       let local: string;
       try { local = validateLocalPath(rawLocal2); }
       catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); return; }
-      const fileConflictRaw = getFlag("--file-conflict") ?? "skip";
-      if (!["skip", "rename", "remove"].includes(fileConflictRaw)) {
-        console.error(`Invalid --file-conflict value: ${fileConflictRaw}. Must be skip, rename, or remove.`);
-        process.exit(1);
-      }
-      const folderConflictRaw = getFlag("--folder-conflict") ?? "skip";
-      if (!["skip", "merge", "rename", "remove"].includes(folderConflictRaw)) {
-        console.error(`Invalid --folder-conflict value: ${folderConflictRaw}. Must be skip, merge, rename, or remove.`);
-        process.exit(1);
-      }
-      if ((fileConflictRaw === "remove" || folderConflictRaw === "remove") && !args.includes("--confirm")) {
-        console.error("Strategy 'remove' deletes the existing LOCAL file or folder before downloading.\nPass --confirm to proceed.");
-        process.exit(1);
-      }
-      print(await drive.download(
-        remote, local,
-        fileConflictRaw as FileDownloadConflictStrategy,
-        folderConflictRaw as FolderDownloadConflictStrategy
-      ));
+      const fileConflictRaw = choice("--file-conflict", DOWNLOAD_FILE_STRATEGIES, "skip");
+      const folderConflictRaw = choice("--folder-conflict", DOWNLOAD_FOLDER_STRATEGIES, "skip");
+      requireConfirmFlag("drive_download", { fileConflictStrategy: fileConflictRaw, folderConflictStrategy: folderConflictRaw });
+      print(await drive.download(remote, local, fileConflictRaw, folderConflictRaw));
       break;
     }
 
@@ -362,10 +346,7 @@ async function run() {
       const delUid = getFlag("--uid");
       const delPath = delUid && (!sub || sub.startsWith("--")) ? undefined : requirePath(sub, "delete <path>|--uid <uid> --confirm");
       const delLabel = delPath ?? `uid ${delUid}`;
-      if (!args.includes("--confirm")) {
-        console.error(`This permanently deletes an item already in trash: ${delLabel}\nPass --confirm to proceed.`);
-        process.exit(1);
-      }
+      requireConfirmFlag("drive_delete", {}, delLabel);
       await drive.delete(delPath, delUid);
       console.log(`Deleted: ${delLabel}`);
       break;
@@ -401,10 +382,7 @@ async function run() {
         console.log(`Revoked access for ${revokeEmail}.`);
       } else if (sub === "remove-all") {
         const removeAllPath = requirePath(rest[0], "share remove-all <path> --confirm");
-        if (!args.includes("--confirm")) {
-          console.error(`This removes everyone's access to: ${removeAllPath}\nPass --confirm to proceed.`);
-          process.exit(1);
-        }
+        requireConfirmFlag("drive_share_remove_all", {}, removeAllPath);
         const removeAll = await drive.shareRemoveAll(removeAllPath);
         console.log((removeAll.removed === 0
           ? `Nothing to remove: ${removeAllPath} has no members or pending invitations.`
@@ -459,10 +437,7 @@ async function run() {
 
     case "trash":
       if (sub === "empty") {
-        if (!args.includes("--confirm")) {
-          console.error("This will permanently delete ALL trash contents.\nPass --confirm to proceed.");
-          process.exit(1);
-        }
+        requireConfirmFlag("drive_empty_trash", {});
         await drive.emptyTrash();
         console.log("Trash emptied.");
       } else if (sub === "list" || sub === "ls") {
@@ -592,10 +567,7 @@ async function run() {
         console.log(`Album updated: ${newName ? `/albums/${newName}` : albumPath}`);
       } else if (sub === "delete") {
         const albumPath = requirePath(rest[0], "album delete <path> [--force] [--save] --confirm");
-        if (!args.includes("--confirm")) {
-          console.error(`This will delete album: ${albumPath}\nPass --confirm to proceed.`);
-          process.exit(1);
-        }
+        requireConfirmFlag("photos_delete_album", {}, albumPath);
         await drive.deleteAlbum(albumPath, args.includes("--force"), args.includes("--save"));
         console.log(`Album deleted: ${albumPath}`);
       } else if (sub === "photos") {
@@ -635,15 +607,12 @@ async function run() {
         let localFolderValidated: string;
         try { localFolderValidated = validateLocalPath(localFolder); }
         catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); return; }
-        if (!["skip", "rename", "remove"].includes(conflictRaw)) {
-          console.error(`Invalid --conflict value: ${conflictRaw}. Must be skip, rename, or remove.`);
+        if (!(PHOTO_DOWNLOAD_STRATEGIES as readonly string[]).includes(conflictRaw)) {
+          console.error(`Invalid --conflict value: ${conflictRaw}. Must be ${humanList(PHOTO_DOWNLOAD_STRATEGIES)}.`);
           process.exit(1);
         }
-        if (conflictRaw === "remove" && !args.includes("--confirm")) {
-          console.error("Strategy 'remove' deletes the existing LOCAL file before downloading.\nPass --confirm to proceed.");
-          process.exit(1);
-        }
-        print(await drive.photoDownload(photoPaths, localFolderValidated, conflictRaw as PhotoDownloadConflictStrategy));
+        requireConfirmFlag("photos_download", { conflictStrategy: conflictRaw });
+        print(await drive.photoDownload(photoPaths, localFolderValidated, conflictRaw as (typeof PHOTO_DOWNLOAD_STRATEGIES)[number]));
       } else if (sub === "upload") {
         if (positionals.length === 0) { console.error("Usage: photo upload <local>... [--conflict X]"); process.exit(1); return; }
         const localPaths: string[] = [];
@@ -651,11 +620,11 @@ async function run() {
           try { localPaths.push(validateLocalPath(p, { scan: true })); }
           catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1); return; }
         }
-        if (!["skip", "rename"].includes(conflictRaw)) {
-          console.error(`Invalid --conflict value: ${conflictRaw}. Must be skip or rename.`);
+        if (!(PHOTO_UPLOAD_STRATEGIES as readonly string[]).includes(conflictRaw)) {
+          console.error(`Invalid --conflict value: ${conflictRaw}. Must be ${humanList(PHOTO_UPLOAD_STRATEGIES)}.`);
           process.exit(1);
         }
-        print(await drive.photoUpload(localPaths, conflictRaw as PhotoUploadConflictStrategy));
+        print(await drive.photoUpload(localPaths, conflictRaw as (typeof PHOTO_UPLOAD_STRATEGIES)[number]));
       } else {
         console.error("Usage: photo timeline [--load-details] | photo download <photo>... <local> | photo upload <local>...");
         process.exit(1);
