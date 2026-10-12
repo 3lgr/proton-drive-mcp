@@ -4,9 +4,14 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { makeSandbox, startServer, fakeEnv, DIST_INDEX, nonVersionCalls } from "./helpers/mcp-client.mjs";
 
 const text = (r) => r.content[0].text;
+const UPLOAD_SRC = join(mkdtempSync(join(tmpdir(), "gp-")), "src.txt");
+writeFileSync(UPLOAD_SRC, "x");
 
 async function withElicitingClient(handler, fn, extraEnv = {}) {
   const sb = makeSandbox();
@@ -113,9 +118,9 @@ describe("elicitation support: the human is asked even when the model says confi
   it("conditional gates ask only for the dangerous strategy", async () => {
     let asked = 0;
     await withElicitingClient(async () => { asked++; return { action: "accept", content: { approve: true } }; }, async (client) => {
-      await client.callTool({ name: "drive_upload", arguments: { localPath: "/tmp", remotePath: "/my-files", fileConflictStrategy: "rename" } });
+      await client.callTool({ name: "drive_upload", arguments: { localPath: UPLOAD_SRC, remotePath: "/my-files", fileConflictStrategy: "rename" } });
       assert.equal(asked, 0);
-      await client.callTool({ name: "drive_upload", arguments: { localPath: "/tmp", remotePath: "/my-files", fileConflictStrategy: "replace", confirmed: true } });
+      await client.callTool({ name: "drive_upload", arguments: { localPath: UPLOAD_SRC, remotePath: "/my-files", fileConflictStrategy: "replace", confirmed: true } });
       assert.equal(asked, 1);
     });
   });
