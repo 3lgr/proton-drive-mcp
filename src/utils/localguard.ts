@@ -199,6 +199,26 @@ export function assertSyncRootUsable(raw: string): string {
 
 const nameDenied = (name: string): boolean => NAME_DENY.some((re) => re.test(name.toLowerCase()));
 
+/** True when the denylist is in force (PROTON_DRIVE_ALLOW_SENSITIVE_PATHS is not exactly "1"/"true"). */
+export const sensitiveRulesEnabled = denylistEnabled;
+
+/** A file name that looks like a credential or secret (.env*, id_*, *.pem, *.key, ...), case-insensitive. */
+export const isSecretName = nameDenied;
+
+/**
+ * True when `fullPath` is a secret-file name or sits in a protected location (~/.ssh, ~/.aws, shell rc files...).
+ * Unlike isProtectedEntry it does NOT apply the local allowlist: the sync folder has its own containment guard.
+ */
+export function isSensitiveLocation(fullPath: string, name: string): boolean {
+  const denied = deniedPaths();
+  if (!denied) return false;
+  if (nameDenied(name)) return true;
+  const lexical = resolve(fullPath);
+  const real = realResolve(lexical);
+  for (const d of denied) if (isProtectedInside(d, real) || isProtectedInside(d, lexical)) return true;
+  return false;
+}
+
 /**
  * True when a directory entry must not be read during a recursive scan: a secret-file name, a protected path, or
  * (with PROTON_DRIVE_LOCAL_ROOT) a path that resolves outside the allowed roots. Names and paths are always

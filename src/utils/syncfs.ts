@@ -1,6 +1,7 @@
 import { open, mkdir, realpath, lstat, stat } from "node:fs/promises";
 import { constants as fsc } from "node:fs";
 import { join, resolve, dirname, basename, relative, isAbsolute, sep } from "node:path";
+import { assertSyncReadable, assertSyncWritable, relUnder } from "./syncGuard.js";
 
 const READ_LIMIT = 1 * 1024 * 1024; // 1 MB — prevent context overflow
 const WRITE_LIMIT = 5 * 1024 * 1024; // 5 MB — cap content written via MCP
@@ -104,7 +105,9 @@ export async function syncFileExists(syncRoot: string, remotePath: string): Prom
 }
 
 export async function readSyncFile(syncRoot: string, remotePath: string): Promise<string> {
-  const { real } = await containedReal(syncRoot, remotePath);
+  const { realRoot, real } = await containedReal(syncRoot, remotePath);
+  // N-02: judged by the lexical spelling AND by where it really points (an in-root symlink must not hide a secret)
+  assertSyncReadable([relUnder(resolve(syncRoot), resolveSyncPath(syncRoot, remotePath)), relUnder(realRoot, real)], [real]);
   // `real` has no symlinks; O_NOFOLLOW closes the swap-after-check window on the last component.
   const fh = await open(real, fsc.O_RDONLY | NOFOLLOW);
   try {
@@ -145,6 +148,11 @@ export async function readSyncFile(syncRoot: string, remotePath: string): Promis
   }
 }
 
+/** Lexical refusal, no file system access: lets the handler refuse before a human is asked about a forbidden target. */
+export function precheckSyncWrite(syncRoot: string, remotePath: string): void {
+  assertSyncWritable([relUnder(resolve(syncRoot), resolveSyncPath(syncRoot, remotePath))]);
+}
+
 export async function writeSyncFile(
   syncRoot: string,
   remotePath: string,
@@ -160,6 +168,9 @@ export async function writeSyncFile(
   const realRoot = await realRootOf(syncRoot, remotePath);
   const name = basename(full);
   const parent = dirname(full);
+  // N-02, before anything is created: lexical spelling, then the resolved location of the parent plus the name
+  const realTarget = join(await realResolve(parent, remotePath), name);
+  assertSyncWritable([relUnder(resolve(syncRoot), full), relUnder(realRoot, realTarget)], [realTarget]);
 
   // Check before creating anything so mkdir cannot create directories outside the root.
   assertInside(realRoot, await realResolve(parent, remotePath), remotePath);

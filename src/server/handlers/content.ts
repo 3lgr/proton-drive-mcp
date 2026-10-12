@@ -1,6 +1,6 @@
 // Handlers: File content and sync-folder tools.
 import { validateRemotePath } from "../../utils/validation.js";
-import { getSyncRoot, readSyncFile, writeSyncFile, syncFileExists } from "../../utils/syncfs.js";
+import { getSyncRoot, readSyncFile, writeSyncFile, syncFileExists, precheckSyncWrite } from "../../utils/syncfs.js";
 import { readDriveContent } from "../../services/content.js";
 import { GATES } from "../../policy/gates.js";
 import { approvalField } from "../../policy/untrusted.js";
@@ -27,6 +27,7 @@ export const contentHandlers: Record<string, Handler> = {
     if (typeof a.content !== "string") return fail("content must be a string");
     const writePath = validateRemotePath(a.path);
     assertMutablePath(writePath, "write");
+    precheckSyncWrite(syncRoot, writePath); // N-02: a forbidden target is refused before any prompt
     // the gate is always evaluated; it only asks when the write would replace an existing file
     const overwrite = await syncFileExists(syncRoot, writePath);
     // N-01: the sync folder is uploaded as it is; a file created inside a shared folder (or below one) is seen by its members
