@@ -16,7 +16,9 @@ changes.
   actual hash on a mismatch and warns when the entry has no pin.
 - **Stable `node` path.** `setup-claude-desktop` writes a `node` found on `PATH` whose realpath is the running binary
   (e.g. `/opt/homebrew/bin/node`) instead of the versioned Cellar path that `brew upgrade node` breaks. Relative PATH
-  entries and locations writable by group or others are ignored; anything doubtful falls back to `process.execPath`.
+  entries and PATH directories writable by group or others are ignored (the directory holding the link is what could be
+  swapped; the real binary's own mode is not judged, because the fallback is exactly as exposed and CI tool caches such
+  as `/opt/hostedtoolcache` are group-writable); anything doubtful falls back to `process.execPath`.
 
 ### CI
 - Node 26 added to the test matrix (22, 24, 26). `npm run test:coverage` exited 0 on Node 26.11.1 and 22.23.3 when
