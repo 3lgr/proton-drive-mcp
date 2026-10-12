@@ -37,6 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
+import { precheckDownload, guardDownload, verifyDownloaded, guardPhotoDownload, verifyPhotoDownload } from "./services/downloadGuard.js";
 import {
   UPLOAD_FILE_STRATEGIES, UPLOAD_FOLDER_STRATEGIES, DOWNLOAD_FILE_STRATEGIES, DOWNLOAD_FOLDER_STRATEGIES,
   PHOTO_UPLOAD_STRATEGIES, PHOTO_DOWNLOAD_STRATEGIES, parseStrategy,
@@ -1296,8 +1297,12 @@ export async function main() {
           const fodcs = parseStrategy(a.folderConflictStrategy, DOWNLOAD_FOLDER_STRATEGIES, "folderConflictStrategy", "skip");
           const downloadRemote = validateRemotePath(a.remotePath);
           const downloadLocal = validateLocalPath(a.localPath);
+          // F-02: names first (no CLI call), then consent, then the remote tree is enumerated and validated.
+          precheckDownload(downloadRemote, downloadLocal);
           await gate("drive_download", { ...a, fileConflictStrategy: fdcs, folderConflictStrategy: fodcs });
+          const plan = await guardDownload(drive, downloadRemote, downloadLocal);
           const downloadResult = await drive.download(downloadRemote, downloadLocal, fdcs, fodcs);
+          verifyDownloaded(plan);
           if (downloadResult.failed > 0) {
             return fail(`Download completed with ${downloadResult.failed} failed file(s). downloaded=${downloadResult.downloaded} skipped=${downloadResult.skipped}`);
           }
@@ -1564,8 +1569,10 @@ export async function main() {
           const downloadPaths = a.photoPaths.map((p) => validateRemotePath(p));
           const downloadFolder = validateLocalPath(a.localFolder);
           const pdcs = parseStrategy(a.conflictStrategy, PHOTO_DOWNLOAD_STRATEGIES, "conflictStrategy", "skip");
+          const photoGuard = guardPhotoDownload(downloadPaths, downloadFolder);
           await gate("photos_download", { ...a, conflictStrategy: pdcs });
           const downloadSummary = await drive.photoDownload(downloadPaths, downloadFolder, pdcs);
+          verifyPhotoDownload(photoGuard);
           if (downloadSummary.failedItems > 0) {
             return fail(`Download completed with ${downloadSummary.failedItems} failed item(s). transferred=${downloadSummary.transferredItems}`);
           }
