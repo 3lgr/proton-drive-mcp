@@ -132,12 +132,12 @@ This fork is **not published on npm**. Install it from the repository, pinned to
 
 ```bash
 # global install from a tag (builds on install; read the tag's diff first)
-npm install -g github:3lgr/proton-drive-mcp#v2.0.2
+npm install -g github:3lgr/proton-drive-mcp#v2.0.3
 
 # or from a clone
 git clone https://github.com/3lgr/proton-drive-mcp.git
 cd proton-drive-mcp
-git checkout v2.0.2
+git checkout v2.0.3
 npm ci --ignore-scripts && npm run build
 node dist/index.js        # the MCP server
 ```
@@ -213,7 +213,7 @@ proton-drive-cli setup-claude-desktop --sync-path "$HOME/Proton Drive" --write
 proton-drive-cli setup-claude-desktop --write --pin
 ```
 
-`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes an absolute path to `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.2`). The `node` it writes is the one running the command, but when a `node` on your `PATH` (e.g. `/opt/homebrew/bin/node`) is the same file it uses that stable path instead of the versioned one (`/opt/homebrew/Cellar/node/<version>/bin/node`), and only if that location is not writable by group or others; otherwise it falls back to the real path. Re-running keeps what is already in the entry (the pin and any extra variables such as `PROTON_DRIVE_LOCAL_ROOT`); `--pin` is the only thing that changes the pin, and without `--pin` a binary that no longer matches the stored pin is refused rather than trusted again. `--pin` trusts the binary that is on disk right now, so only use it on a CLI you installed from Proton. `doctor` reads the pin from the entry (the one the server started by Claude Desktop actually uses), compares it with the binary and warns when the entry has none. Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
+`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes an absolute path to `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.3`). The `node` it writes is the one running the command, but when a `node` on your `PATH` (e.g. `/opt/homebrew/bin/node`) is the same file it uses that stable path instead of the versioned one (`/opt/homebrew/Cellar/node/<version>/bin/node`), and only if that location is not writable by group or others; otherwise it falls back to the real path. Re-running keeps what is already in the entry (the pin and any extra variables such as `PROTON_DRIVE_LOCAL_ROOT`); `--pin` is the only thing that changes the pin, and without `--pin` a binary that no longer matches the stored pin is refused rather than trusted again. `--pin` trusts the binary that is on disk right now, so only use it on a CLI you installed from Proton. `doctor` reads the pin from the entry (the one the server started by Claude Desktop actually uses), compares it with the binary and warns when the entry has none. Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
 
 The default config location is per OS (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME` or `~/.config/Claude/`); use `--config` or the `CLAUDE_DESKTOP_CONFIG` environment variable to point elsewhere. On Windows the CLI lookup honours `PATHEXT`.
 
@@ -639,7 +639,7 @@ If the `proton-drive` binary is installed under a non-standard name or location,
 ```bash
 PROTON_DRIVE_BIN=/usr/local/bin/proton-drive proton-drive-mcp
 ```
-(after `npm install -g github:3lgr/proton-drive-mcp#v2.0.2`; do **not** use `npx proton-drive-mcp`, which is the upstream
+(after `npm install -g github:3lgr/proton-drive-mcp#v2.0.3`; do **not** use `npx proton-drive-mcp`, which is the upstream
 package). Or in Claude Desktop config, pointing at the pinned install:
 ```json
 {

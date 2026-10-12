@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.3 - 2026-10-12
+
+Fixes found by running 2.0.2 on a real macOS/Homebrew machine and in CI. No tool, schema or gate changes.
+
+- **Stable `node` path now works with Homebrew.** 2.0.2 refused any PATH directory writable by group, but Homebrew's
+  `/opt/homebrew/bin` is `drwxrwxr-x user:admin` by design, so `setup-claude-desktop` always fell back to the versioned
+  Cellar path. A directory is now refused when it is world-writable, or group-writable unless it is the standard macOS
+  layout (owned by the current user, group `admin`, whose members can already act as root). Same bits on Linux are
+  still refused. The decision is a pure function (`dirTooOpen`) with unit tests.
+- **CI on Ubuntu:** the same check no longer judges the real binary's mode (GitHub runner tool caches are
+  group-writable and the fallback is exactly as exposed), and the tests no longer depend on the runner layout.
+
 ## 2.0.2 - 2026-10-12
 
 Compatibility with the CLI 0.9 and Node 26, a pin helper for Claude Desktop, and test coverage. No tool, schema or gate

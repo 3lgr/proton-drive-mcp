@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, chmodSync as chmod2, copyFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSandbox, fakeEnv, DIST_CLI } from "./helpers/mcp-client.mjs";
-import { stableNodePath } from "../dist/utils/claudeConfig.js";
+import { stableNodePath, dirTooOpen } from "../dist/utils/claudeConfig.js";
 
 const dirs = [];
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -83,6 +83,16 @@ describe("setup-claude-desktop: stable node path", () => {
     assert.equal((await setupDryRun(d)).command, process.execPath);
     chmod2(d, 0o755);
     assert.equal((await setupDryRun(d)).command, join(d, "node"));
+  });
+  it("dirTooOpen: the Homebrew layout (user:admin 0775 on macOS) is accepted, anything wider is not", () => {
+    const me = 501;
+    assert.equal(dirTooOpen({ mode: 0o40775, uid: me, gid: 80 }, me, "darwin"), false, "Homebrew /opt/homebrew/bin");
+    assert.equal(dirTooOpen({ mode: 0o40755, uid: me, gid: 80 }, me, "darwin"), false, "not group-writable");
+    assert.equal(dirTooOpen({ mode: 0o40775, uid: me, gid: 20 }, me, "darwin"), true, "group other than admin");
+    assert.equal(dirTooOpen({ mode: 0o40775, uid: 0, gid: 80 }, me, "darwin"), true, "owned by someone else");
+    assert.equal(dirTooOpen({ mode: 0o40775, uid: me, gid: 80 }, me, "linux"), true, "same bits on Linux are not trusted");
+    assert.equal(dirTooOpen({ mode: 0o40777, uid: me, gid: 80 }, me, "darwin"), true, "world-writable");
+    assert.equal(dirTooOpen({ mode: 0o40777, uid: me, gid: 80 }, me, "win32"), false, "modes mean nothing on Windows");
   });
   it("does not reject the stable link because the real binary is group-writable (CI tool caches are)", () => {
     const d = tmp();

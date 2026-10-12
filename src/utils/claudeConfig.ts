@@ -64,10 +64,23 @@ export function isEphemeralInstall(p: string): boolean {
   return /[\\/]_npx[\\/]/.test(p);
 }
 
-/** True when group or others can write to the path (POSIX); always false on Windows, where modes mean nothing. */
-function writableByOthers(p: string): boolean {
-  if (process.platform === "win32") return false;
-  return (statSync(p).mode & 0o022) !== 0;
+/** Group id of macOS `admin`: its members can already act as root, so they are not an extra principal. */
+const MACOS_ADMIN_GID = 80;
+
+/**
+ * Pure: is a directory with this stat open enough for another principal to swap a link inside it? World-writable
+ * always is. Group-writable is accepted only in the standard Homebrew layout (macOS, owned by the current user,
+ * group `admin`: /opt/homebrew/bin is drwxrwxr-x user:admin). Windows modes mean nothing, so never "open" there.
+ */
+export function dirTooOpen(
+  st: { mode: number; uid: number; gid: number },
+  uid: number | undefined = process.getuid?.(),
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform === "win32") return false;
+  if ((st.mode & 0o002) !== 0) return true;
+  if ((st.mode & 0o020) === 0) return false;
+  return !(platform === "darwin" && uid !== undefined && st.uid === uid && st.gid === MACOS_ADMIN_GID);
 }
 
 /**
@@ -86,7 +99,7 @@ export function stableNodePath(execPath: string = process.execPath, pathVar: str
   for (const dir of pathVar.split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue;
     const candidate = join(dir, name);
-    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real && !writableByOthers(dir)) return candidate; } catch { /* dangling link: next */ }
+    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real && !dirTooOpen(statSync(dir))) return candidate; } catch { /* dangling link: next */ }
   }
   return execPath;
 }
