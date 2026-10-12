@@ -7,7 +7,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, chmodSync as chmod2, copyFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSandbox, fakeEnv, DIST_CLI } from "./helpers/mcp-client.mjs";
-import { stableNodePath, dirTooOpen } from "../dist/utils/claudeConfig.js";
+import { stableNodePath, dirTooOpen, buildEntry, nodePathNote } from "../dist/utils/claudeConfig.js";
 
 const dirs = [];
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -93,6 +93,16 @@ describe("setup-claude-desktop: stable node path", () => {
     assert.equal(dirTooOpen({ mode: 0o40775, uid: me, gid: 80 }, me, "linux"), true, "same bits on Linux are not trusted");
     assert.equal(dirTooOpen({ mode: 0o40777, uid: me, gid: 80 }, me, "darwin"), true, "world-writable");
     assert.equal(dirTooOpen({ mode: 0o40777, uid: me, gid: 80 }, me, "win32"), false, "modes mean nothing on Windows");
+  });
+  it("--exact-node writes the real execPath, and the note names the risk only for a group-writable link directory", () => {
+    const d = tmp();
+    const link = join(d, "node");
+    assert.equal(buildEntry("/x/proton-drive", undefined, undefined, {}, true).command, process.execPath);
+    chmodSync(d, 0o775);
+    assert.match(nodePathNote(link, "/real/node") ?? "", /--exact-node/);
+    chmodSync(d, 0o755);
+    assert.equal(nodePathNote(link, "/real/node"), undefined, "a private directory needs no warning");
+    assert.equal(nodePathNote("/real/node", "/real/node"), undefined, "the real path needs no warning");
   });
   it("does not reject the stable link because the real binary is group-writable (CI tool caches are)", () => {
     const d = tmp();

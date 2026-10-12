@@ -1,6 +1,6 @@
 {
   "name": "@3lgr/proton-drive-mcp",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "Hardened fork of proton-drive-mcp: an MCP server and CLI that lets an AI assistant work with Proton Drive and Proton Photos through the official proton-drive CLI, with consent gates the model cannot bypass, a local path allowlist, a sharing policy and untrusted-content handling.",
   "type": "module",
   "main": "dist/index.js",

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.4 - 2026-10-12
+
+Follow-up to the 2.0.3 review: the stable `node` link is a persistent dependency, so the choice is now explicit.
+
+- `setup-claude-desktop` prints a note when the chosen `node` is reached through a group-writable directory (standard
+  Homebrew), explaining that another admin account could replace the link.
+- New `--exact-node` flag writes the real versioned path instead (re-run setup after upgrading Node).
+- README documents the trade-off. No tool, schema or gate changes.
+
 ## 2.0.3 - 2026-10-12
 
 Fixes found by running 2.0.2 on a real macOS/Homebrew machine and in CI. No tool, schema or gate changes.

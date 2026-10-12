@@ -12,7 +12,7 @@ import { DriveService } from "./services/drive.js";
 import { DriveCliError, DriveCliNotFoundError, DriveNotAuthenticatedError, DriveParseError } from "./utils/errors.js";
 import { checkCliAvailable } from "./utils/subprocess.js";
 import { runDoctor, formatDoctor } from "./utils/doctor.js";
-import { buildEntry, defaultConfigPath, isDirectory, readEntryEnv, resolveDriveCli, writeEntry, SERVER_KEY } from "./utils/claudeConfig.js";
+import { buildEntry, defaultConfigPath, isDirectory, nodePathNote, readEntryEnv, resolveDriveCli, writeEntry, SERVER_KEY } from "./utils/claudeConfig.js";
 import { parseSha256, sha256File } from "./utils/binaryIntegrity.js";
 import { syncPlan, planBulkMove, planBulkTrash, loadListing, foldersToList, type Direction, type Compare } from "./services/plan.js";
 import { invalidatePath } from "./services/walk.js";
@@ -101,11 +101,12 @@ Commands:
 
   doctor [--config <path>]                 Read-only diagnostics: Node, proton-drive CLI, auth, sync path, Claude Desktop config
                                            (exit 1 if any check fails)
-  setup-claude-desktop [--config <path>] [--sync-path <dir>] [--write] [--pin]
+  setup-claude-desktop [--config <path>] [--sync-path <dir>] [--write] [--pin] [--exact-node]
                                            Print the Claude Desktop entry for this server (dry run); --write adds it to the
                                            config (timestamped backup first). --pin also records the sha256 of the resolved
                                            CLI binary as PROTON_DRIVE_BIN_SHA256 in the entry (re-run after a CLI upgrade).
-                                           Restart Claude Desktop afterwards.
+                                           --exact-node writes the real versioned node path instead of a stable PATH link
+                                           (re-run after upgrading Node). Restart Claude Desktop afterwards.
 
 Flags:
   --json                                   Machine-readable JSON output (one line)
@@ -218,9 +219,11 @@ async function setupClaudeDesktop() {
   }
   const preserved = readEntryEnv(configPath) ?? {};
   await refuseUnpinnedChange(cliPath, preserved, pin !== undefined);
-  const entry = buildEntry(cliPath, syncPath, pin, preserved);
+  const entry = buildEntry(cliPath, syncPath, pin, preserved, args.includes("--exact-node"));
   const shown = JSON.stringify({ mcpServers: { [SERVER_KEY]: entry } }, null, 2);
-  const pinNote = pin ? `Pinned: PROTON_DRIVE_BIN_SHA256 is the sha256 of ${cliPath} as it is now; only pin a binary you got from Proton.\n` : "";
+  const nodeNote = nodePathNote(entry.command);
+  const pinNote = (pin ? `Pinned: PROTON_DRIVE_BIN_SHA256 is the sha256 of ${cliPath} as it is now; only pin a binary you got from Proton.\n` : "")
+    + (nodeNote ? `${nodeNote}\n` : "");
   if (!args.includes("--write")) {
     console.log(`Dry run: nothing changed. Would set this entry in ${configPath}:\n${shown}\n${pinNote}Re-run with --write to apply.`);
     return;

@@ -114,7 +114,20 @@ export function readEntryEnv(file: string): Record<string, string> | undefined {
   } catch { return undefined; }
 }
 
-export function buildEntry(cliPath: string, syncPath?: string, binSha256?: string, preservedEnv: Readonly<Record<string, string>> = {}): McpEntry {
+/**
+ * A one-line warning when the chosen `node` is reached through a directory that group members can write to (the
+ * Homebrew layout, accepted on purpose): that link is a persistent dependency of the Claude Desktop entry that another
+ * admin account could swap. Undefined when the command is the real binary path or its directory is not group-writable.
+ */
+export function nodePathNote(command: string, execPath: string = process.execPath): string | undefined {
+  if (command === execPath) return undefined;
+  try {
+    if ((statSync(dirname(command)).mode & 0o020) === 0) return undefined;
+  } catch { return undefined; }
+  return `Note: "${command}" lives in a directory that group "admin" can write to (standard Homebrew); another admin account could replace that link. Use --exact-node to write the versioned path ${execPath} instead (re-run setup after \`brew upgrade node\`).`;
+}
+
+export function buildEntry(cliPath: string, syncPath?: string, binSha256?: string, preservedEnv: Readonly<Record<string, string>> = {}, exactNode = false): McpEntry {
   const entryPath = serverEntryPath();
   if (isEphemeralInstall(entryPath)) {
     throw new Error(`${entryPath} is in a temporary npx cache and would stop working once the cache is pruned. Install it first (see "Install" in the README: npm install -g github:3lgr/proton-drive-mcp#<tag>) and run proton-drive-cli from there.`);
@@ -127,7 +140,7 @@ export function buildEntry(cliPath: string, syncPath?: string, binSha256?: strin
   const sync = syncPath ?? preservedEnv["PROTON_DRIVE_SYNC_PATH"];
   if (sync !== undefined) env["PROTON_DRIVE_SYNC_PATH"] = sync;
   for (const [k, v] of Object.entries(preservedEnv)) if (!(k in env)) env[k] = v;
-  return { command: stableNodePath(), args: [entryPath], env };
+  return { command: exactNode ? process.execPath : stableNodePath(), args: [entryPath], env };
 }
 
 export function isDirectory(p: string): boolean {
