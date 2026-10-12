@@ -1,5 +1,7 @@
 name: Publish to npm
 
+# Publishing happens ONLY from a version tag, from the exact tarball that was built and tested in the first job.
+# The job that holds the OIDC token (id-token: write) runs no project code: it installs a pinned npm and publishes.
 on:
   push:
     tags:
@@ -9,12 +11,10 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
-    environment: npm-publish
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,19 +27,13 @@ jobs:
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || (echo "Tagged commit $GITHUB_SHA is not reachable from origin/main" && exit 1)
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
           cache: npm
 
-      # Trusted Publishing needs npm CLI >=11.5.1; setup-node's bundled npm may be older.
-      - name: Update npm for Trusted Publishing support
-        run: npm install -g npm@11
-
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
 
       - name: Verify version matches tag
         run: |
@@ -47,15 +41,54 @@ jobs:
           TAG=${GITHUB_REF_NAME#v}
           [ "$PKG" = "$TAG" ] || (echo "package.json version ($PKG) does not match tag ($TAG)" && exit 1)
 
-      - name: Lint and test
-        run: npm run ci
+      - name: Lint, test, audit
+        run: |
+          npm run ci
+          npm audit --audit-level=high
 
       - name: Packaging smoke test
         run: node scripts/pack-smoke.mjs
 
-      # Publishes through npm Trusted Publishing (OIDC): no token. Configured on npmjs.com for
-      # repo googlarz/proton-drive-mcp, workflow publish.yml, environment npm-publish.
-      # If a publish fails with an auth error, the trusted publisher settings do not match this
-      # workflow; re-add `env: NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` here as a fallback.
+      - name: Pack the tarball that will be published
+        run: |
+          mkdir -p out/pack
+          npm pack --ignore-scripts --pack-destination out/pack
+          (cd out/pack && sha256sum ./*.tgz | tee SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tarball
+          path: out/pack/*
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing needs npm CLI >= 11.5.1; the exact version is pinned (npm 11.20.0).
+      - name: Install pinned npm
+        run: npm install -g npm@11.20.0
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tarball
+          path: out/pack
+
+      - name: Verify tarball checksum
+        working-directory: out/pack
+        run: sha256sum --check SHA256SUMS
+
+      # npm Trusted Publishing (OIDC), no token. Configure the trusted publisher on npmjs.com for THIS repository,
+      # workflow file publish.yml, environment npm-publish (see CONTRIBUTING.md).
       - name: Publish
-        run: npm publish --provenance --access public
+        working-directory: out/pack
+        run: npm publish ./*.tgz --provenance --access public --ignore-scripts
