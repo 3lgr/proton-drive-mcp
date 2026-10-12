@@ -1,4 +1,4 @@
-import { realpathSync, lstatSync, readlinkSync, statSync } from "node:fs";
+import { realpathSync, lstatSync, mkdirSync, readlinkSync, statSync } from "node:fs";
 
 // realpathSync.native asks the OS, so it also returns the on-disk case of every existing component.
 const realpath = realpathSync.native;
@@ -84,9 +84,8 @@ function denylistEnabled(): boolean {
   return process.env["PROTON_DRIVE_ALLOW_SENSITIVE_PATHS"] !== "1";
 }
 
-/** Protected absolute locations, or null when the denylist is off (PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1). */
-function deniedPaths(): Set<string> | null {
-  if (!denylistEnabled()) return null;
+/** The protected locations as absolute paths (lexical and resolved). Independent of any opt-out. */
+function sensitiveSet(): Set<string> {
   const home = homedir();
   const denied = new Set<string>();
   for (const rel of HOME_DENY) {
@@ -100,9 +99,101 @@ function deniedPaths(): Set<string> | null {
   return denied;
 }
 
+/** Protected absolute locations, or null when the denylist is off (PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1). */
+function deniedPaths(): Set<string> | null {
+  if (!denylistEnabled()) return null;
+  return sensitiveSet();
+}
+
 function rootsEnv(): string[] {
   const env = process.env["PROTON_DRIVE_LOCAL_ROOT"];
   return env ? env.split(delimiter).filter((r) => r.trim() !== "") : [];
+}
+
+// ---- allowlist: where local files may be read from and written to --------------------------------------------------
+// Default: ONE dedicated folder created by the server (~/ProtonDriveMCP, 0700). PROTON_DRIVE_LOCAL_ROOT replaces it.
+// PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH=1 removes the allowlist (the denylist below remains as defence in depth).
+// The denylist can never be complete; the allowlist is the control.
+export const ANY_LOCAL_ENV = "PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH";
+export const DEFAULT_ROOT_NAME = "ProtonDriveMCP";
+
+export function anyLocalPathAllowed(): boolean {
+  return process.env[ANY_LOCAL_ENV] === "1";
+}
+
+/**
+ * A root must exist, must not be a symlink, and must be neither "/", nor the home folder, nor contain (or sit inside)
+ * a protected location. Returns the realpath.native-resolved root.
+ */
+export function validateRoot(raw: string, label: string): string {
+  const abs = resolve(raw);
+  let st;
+  try { st = lstatSync(abs); }
+  catch { throw new Error(`${label} does not exist: ${raw}. Create the folder first.`); }
+  if (st.isSymbolicLink()) throw new Error(`${label} is a symlink, which is not accepted as a root: ${raw}`);
+  if (!st.isDirectory()) throw new Error(`${label} is not a folder: ${raw}`);
+  const real = realpath(abs);
+  if (real === sep || real === resolve(homedir()) || real === realResolve(homedir())) {
+    throw new Error(`${label} must not be "/" or your home folder: ${raw}`);
+  }
+  if (denylistEnabled()) {
+    for (const d of sensitiveSet()) {
+      if (isProtectedInside(real, d) || isProtectedInside(d, real)) {
+        throw new Error(`${label} contains or sits inside a protected location (${d}); choose a dedicated folder: ${raw}`);
+      }
+    }
+  }
+  return real;
+}
+
+function ensureDefaultRoot(): string {
+  const dir = join(homedir(), DEFAULT_ROOT_NAME);
+  try {
+    lstatSync(dir);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    mkdirSync(dir, { mode: 0o700 });
+  }
+  const st = lstatSync(dir);
+  if (st.isSymbolicLink()) throw new Error(`the default local folder ${dir} is a symlink; remove it or set PROTON_DRIVE_LOCAL_ROOT`);
+  if (typeof process.getuid === "function" && st.uid !== process.getuid()) throw new Error(`the default local folder ${dir} is not owned by you`);
+  return validateRoot(dir, `the default local folder ${dir}`);
+}
+
+/** Roots in force. An empty list means "no allowlist" (only with PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH=1). */
+export function activeRoots(): string[] {
+  const configured = rootsEnv();
+  if (configured.length > 0) return configured.map((r) => validateRoot(r, "PROTON_DRIVE_LOCAL_ROOT entry"));
+  if (anyLocalPathAllowed()) return [];
+  return [ensureDefaultRoot()];
+}
+
+/** Describes the allowlist for messages and `doctor`. */
+export function describeRoots(): { mode: "configured" | "default" | "any"; roots: string[] } {
+  if (rootsEnv().length > 0) return { mode: "configured", roots: rootsEnv() };
+  if (anyLocalPathAllowed()) return { mode: "any", roots: [] };
+  return { mode: "default", roots: [join(homedir(), DEFAULT_ROOT_NAME)] };
+}
+
+/**
+ * The one entry point every local file operation goes through (upload, download, photos, sync plan, read_file/
+ * write_file roots): the real path of `absPath` must be inside an allowed root. Returns that real path.
+ */
+export function resolveAllowedLocal(absPath: string): string {
+  const real = realResolve(resolve(absPath));
+  const roots = activeRoots();
+  if (roots.length > 0 && !roots.some((r) => isInside(r, real))) {
+    const where = rootsEnv().length > 0
+      ? "PROTON_DRIVE_LOCAL_ROOT"
+      : `the default local folder ~/${DEFAULT_ROOT_NAME} (set PROTON_DRIVE_LOCAL_ROOT to choose another, or ${ANY_LOCAL_ENV}=1 to lift the allowlist)`;
+    throw new Error(`local path is outside ${where}: ${absPath}`);
+  }
+  return real;
+}
+
+/** A sync folder given by the operator (PROTON_DRIVE_SYNC_PATH) must be a usable root too. */
+export function assertSyncRootUsable(raw: string): string {
+  return validateRoot(raw, "PROTON_DRIVE_SYNC_PATH");
 }
 
 const nameDenied = (name: string): boolean => NAME_DENY.some((re) => re.test(name.toLowerCase()));
@@ -115,8 +206,8 @@ const nameDenied = (name: string): boolean => NAME_DENY.some((re) => re.test(nam
 export function isProtectedEntry(fullPath: string, name: string): boolean {
   const lexical = resolve(fullPath);
   const real = realResolve(lexical);
-  const roots = rootsEnv();
-  if (roots.length > 0 && !roots.some((r) => isInside(realResolve(r), real))) return true;
+  const roots = activeRoots();
+  if (roots.length > 0 && !roots.some((r) => isInside(r, real))) return true;
   const denied = deniedPaths();
   if (!denied) return false;
   if (nameDenied(name)) return true;
@@ -132,10 +223,7 @@ export function assertLocalPathAllowed(absPath: string, opts: { scan?: boolean }
   const lexical = resolve(absPath);
   const real = realResolve(lexical);
 
-  const roots = rootsEnv();
-  if (roots.length > 0 && !roots.some((r) => isInside(realResolve(r), real))) {
-    throw new Error(`local path is outside PROTON_DRIVE_LOCAL_ROOT: ${absPath}`);
-  }
+  resolveAllowedLocal(absPath); // the allowlist first; the denylist below is defence in depth
 
   const denied = deniedPaths();
   if (!denied) return;

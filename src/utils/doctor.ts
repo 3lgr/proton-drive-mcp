@@ -4,6 +4,7 @@ import { DriveService } from "../services/drive.js";
 import { runDriveRaw } from "./subprocess.js";
 import { cliCompatWarning, TESTED_CLI } from "./cliVersion.js";
 import { binaryRisks, expectedSha256, trustedBinary, HASH_ENV, BIN_ENV } from "./binaryIntegrity.js";
+import { describeRoots, validateRoot, DEFAULT_ROOT_NAME, ANY_LOCAL_ENV } from "./localguard.js";
 import { defaultConfigPath, isDirectory, isExecutableFile, resolveBinary, resolveDriveCli, SERVER_KEY } from "./claudeConfig.js";
 
 export interface Check {
@@ -84,6 +85,24 @@ async function integrityChecks(cliPath: string): Promise<Check[]> {
   return out;
 }
 
+/** Where local files may be read from and written to (the allowlist). Never creates anything. */
+function localRootCheck(): Check {
+  const d = describeRoots();
+  if (d.mode === "any") {
+    return {
+      id: "local-root", status: "warn",
+      message: `${ANY_LOCAL_ENV}=1: any local path outside the credential denylist is reachable by the assistant`,
+      hint: "Unset it (the default is the dedicated folder ~/" + DEFAULT_ROOT_NAME + ") or set PROTON_DRIVE_LOCAL_ROOT to a project folder.",
+    };
+  }
+  if (d.mode === "default") return { id: "local-root", status: "ok", message: `default folder ~/${DEFAULT_ROOT_NAME} (created 0700 on first use)` };
+  try {
+    return { id: "local-root", status: "ok", message: d.roots.map((r) => validateRoot(r, "PROTON_DRIVE_LOCAL_ROOT entry")).join(", ") };
+  } catch (e) {
+    return { id: "local-root", status: "fail", message: e instanceof Error ? e.message : String(e), hint: "Fix PROTON_DRIVE_LOCAL_ROOT: existing folders, no symlinks, not your home folder." };
+  }
+}
+
 function syncPathCheck(): Check | undefined {
   const p = process.env["PROTON_DRIVE_SYNC_PATH"];
   if (!p) return undefined;
@@ -140,6 +159,7 @@ export async function runDoctor(configPath?: string): Promise<{ ok: boolean; che
   const checks: Check[] = [nodeCheck()];
   const cli = await cliChecks();
   checks.push(...cli.checks);
+  checks.push(localRootCheck());
   const sync = syncPathCheck();
   if (sync) checks.push(sync);
   checks.push(configCheck(configPath ? resolve(configPath) : defaultConfigPath(), cli.cliPath));

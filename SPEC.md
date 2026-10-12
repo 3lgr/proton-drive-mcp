@@ -73,8 +73,8 @@ Tested against Proton Drive CLI 0.8.x (`TESTED_CLI = "0.8"` in `src/utils/cliVer
     and non-strict gated tools accept prompt-level `confirmed: true`;
   - the companion CLI is typed by a human: the same table says which commands need `--confirm`.
   `confirmed` is therefore a hint for non-eliciting clients, never proof of consent.
-- Local paths: credential denylist and secret-name denylist (also inside `PROTON_DRIVE_LOCAL_ROOT`), allowlist,
-  realpath-resolved and case-folded on macOS/Windows. Downloads: names validated, private staging, pure plan, no
+- Local paths: an ALLOWLIST (default `~/ProtonDriveMCP`, or `PROTON_DRIVE_LOCAL_ROOT`; `PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH=1`
+  lifts it) resolved with `realpath.native`; the credential and secret-name denylist stays as defence in depth. Downloads: names validated, private staging, pure plan, no
   overwrite. Uploads: frozen hashed snapshot bound to the approved manifest.
 - Remote paths: roots are never mutated; `drive_delete` accepts only trash items.
 - Sharing policy for links and invitations (`PROTON_DRIVE_SHARE_POLICY`).
