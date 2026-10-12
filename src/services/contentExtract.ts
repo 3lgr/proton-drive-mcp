@@ -2,6 +2,12 @@
 // memory and time limits); kept free of project imports so the worker starts light.
 
 export const DOCX_MAX_UNCOMPRESSED = 20 * 1024 * 1024;
+/** Archive entries a .docx may declare (a real document has a few dozen). Checked while the directory is walked. */
+export const ZIP_MAX_ENTRIES = 5_000;
+/** word/document.xml may not expand more than this factor (deflate tops out near 1000:1; text sits at 5-20:1). */
+export const ZIP_MAX_RATIO = 100;
+/** Sum of every declared uncompressed size in the archive, whether or not we extract it. */
+export const ZIP_MAX_DECLARED_TOTAL = 200 * 1024 * 1024;
 export const PDF_MAX_PAGES = 100;
 
 export interface ExtractResult { text: string; note?: string; capped: boolean }
@@ -45,20 +51,33 @@ export async function extractDocx(bytes: Uint8Array, load: Loader, maxChars: num
   let fflate: any;
   try { fflate = await load("fflate"); } catch { throw new Error("DOCX support needs the optional package fflate (npm install fflate)"); }
   let tooBig = false;
+  let tooMany = false;
+  let tooDense = false;
+  let tooLarge = false;
   let declared = -1;
+  let entries = 0;
+  let declaredTotal = 0;
   let files: Record<string, Uint8Array>;
   try {
     files = fflate.unzipSync(bytes, {
-      filter: (f: { name: string; originalSize: number }) => {
+      filter: (f: { name: string; size: number; originalSize: number }) => {
+        // Every entry is counted and measured from its header; nothing is inflated for entries we do not want.
+        if (++entries > ZIP_MAX_ENTRIES) { tooMany = true; return false; }
+        declaredTotal += f.originalSize;
+        if (declaredTotal > ZIP_MAX_DECLARED_TOTAL) { tooLarge = true; return false; }
         if (f.name !== "word/document.xml") return false;
         if (f.originalSize > DOCX_MAX_UNCOMPRESSED) { tooBig = true; return false; }
+        if (f.originalSize > 256 * 1024 && f.originalSize / Math.max(1, f.size) > ZIP_MAX_RATIO) { tooDense = true; return false; }
         declared = f.originalSize;
-        return true;
+        return !tooMany && !tooLarge;
       },
     });
   } catch {
     throw new Error("not a valid .docx (could not unzip)");
   }
+  if (tooMany) throw new Error(`refused: the archive has more than ${ZIP_MAX_ENTRIES} entries`);
+  if (tooLarge) throw new Error(`refused: the archive declares more than ${ZIP_MAX_DECLARED_TOTAL / 1048576} MB uncompressed in total`);
+  if (tooDense) throw new Error(`refused: word/document.xml expands more than ${ZIP_MAX_RATIO}:1 (decompression bomb)`);
   if (tooBig) throw new Error(`refused: word/document.xml is larger than ${DOCX_MAX_UNCOMPRESSED / 1048576} MB uncompressed`);
   const entry = files["word/document.xml"];
   if (!entry) throw new Error("not a valid .docx (no word/document.xml)");
