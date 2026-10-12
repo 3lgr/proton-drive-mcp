@@ -4,6 +4,8 @@
 // planUploadSnapshot() is pure; the executor performs only what it returns. Any error refuses the call.
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, utimesSync } from "node:fs";
 import { createReadStream, createWriteStream } from "node:fs";
+import { createHash } from "node:crypto";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -28,11 +30,13 @@ export interface ScanNode {
   readonly size: number;
   readonly nlink: number;
   readonly dev: number;
+  readonly ino: number;
+  readonly mtimeMs: number;
   readonly children: readonly ScanNode[];
 }
 export type SnapshotAction =
   | { readonly op: "mkdir"; readonly rel: string }
-  | { readonly op: "copy"; readonly rel: string; readonly size: number };
+  | { readonly op: "copy"; readonly rel: string; readonly size: number; readonly dev: number; readonly ino: number; readonly mtimeMs: number };
 
 export interface SnapshotLimits {
   readonly maxEntries: number;
@@ -65,7 +69,7 @@ export function planUploadSnapshot(root: ScanNode, limits: SnapshotLimits): Snap
     if (bytes > limits.maxBytes) {
       throw new Error(`refusing to upload: more than ${limits.maxBytes} bytes (PROTON_DRIVE_UPLOAD_MAX_BYTES). The upload is snapshotted before sending; raise the limit or upload parts separately.`);
     }
-    out.push({ op: "copy", rel, size: n.size });
+    out.push({ op: "copy", rel, size: n.size, dev: n.dev, ino: n.ino, mtimeMs: n.mtimeMs });
   };
   visit(root, "", 0);
   return out;
@@ -76,7 +80,7 @@ function scanTree(path: string, name: string, budget = { left: MAX_UPLOAD_ENTRIE
   const st = lstatSync(path);
   const kind: EntryKind = st.isSymbolicLink() ? "symlink" : st.isDirectory() ? "dir" : st.isFile() ? "file" : "other";
   const children = kind === "dir" ? readdirSync(path).sort().map((c) => scanTree(join(path, c), c, budget)) : [];
-  return { name, kind, size: st.size, nlink: st.nlink, dev: st.dev, children };
+  return { name, kind, size: st.size, nlink: st.nlink, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, children };
 }
 
 function limitsFor(root: string): SnapshotLimits {
@@ -87,52 +91,124 @@ function limitsFor(root: string): SnapshotLimits {
   };
 }
 
-/** Scan + plan without copying anything (cheap early refusal, before a human is asked). Throws on any problem. */
-export function precheckUpload(localPath: string): void {
-  planUploadSnapshot(scanTree(localPath, basename(localPath)), limitsFor(localPath));
+/** Scan + plan without copying anything (early refusal, before a human is asked). The returned plan is the manifest that is approved. */
+export function precheckUpload(localPath: string): SnapshotAction[] {
+  return planUploadSnapshot(scanTree(localPath, basename(localPath)), limitsFor(localPath));
 }
 
-async function copyRegular(src: string, dst: string, expectedSize: number): Promise<void> {
-  // O_NOFOLLOW + fstat on the descriptor we read from: a file swapped for a link or another file after the scan is caught here.
+interface CopiedFile { readonly dst: string; readonly size: number; readonly dev: number; readonly ino: number; readonly mtimeMs: number; readonly sha256: string }
+
+/**
+ * Copies one regular file. The source is opened O_NOFOLLOW and judged by fstat on that very descriptor: it must
+ * still be the file that was scanned (same dev:ino, size, mtime) - an intermediate directory swapped for a link
+ * lands on a different inode and is caught here. The copy is created O_EXCL inside the private staging directory.
+ */
+async function copyRegular(src: string, dst: string, planned: Extract<SnapshotAction, { op: "copy" }>): Promise<CopiedFile> {
   const fd = openSync(src, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const st = fstatSync(fd);
-    if (!st.isFile() || st.nlink > 1) throw new Error(`refusing to upload: ${showValue(src, 80, 30)} changed type while it was being copied`);
-    if (st.size !== expectedSize) throw new Error(`refusing to upload: ${showValue(src, 80, 30)} changed size while it was being copied`);
-    const input = createReadStream(src, { fd, autoClose: false, start: 0, end: Math.max(0, st.size - 1) });
-    if (st.size > 0) await pipeline(input, createWriteStream(dst, { flags: "wx", mode: 0o600 }));
-    else await pipeline([], createWriteStream(dst, { flags: "wx", mode: 0o600 }));
+    if (!st.isFile() || st.nlink > 1) throw new Error(`refusing to upload: ${showValue(planned.rel, 80, 30)} changed type while it was being copied`);
+    if (st.dev !== planned.dev || st.ino !== planned.ino || st.size !== planned.size || st.mtimeMs !== planned.mtimeMs) {
+      throw new Error(`refusing to upload: ${showValue(planned.rel, 80, 30)} changed after it was scanned`);
+    }
+    const hash = createHash("sha256");
+    const tap = new Transform({ transform(chunk, _enc, cb) { hash.update(chunk); cb(null, chunk); } });
+    const out = createWriteStream(dst, { flags: "wx", mode: 0o600 });
+    if (st.size > 0) await pipeline(createReadStream(src, { fd, autoClose: false, start: 0, end: st.size - 1 }), tap, out);
+    else await pipeline([], tap, out);
     utimesSync(dst, st.atime, st.mtime); // Drive keeps the original modification time
+    const done = lstatSync(dst);
+    return { dst, size: done.size, dev: done.dev, ino: done.ino, mtimeMs: done.mtimeMs, sha256: hash.digest("hex") };
   } finally {
     closeSync(fd);
   }
 }
 
+async function sha256File(path: string): Promise<string> {
+  const h = createHash("sha256");
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (st.size > 0) for await (const chunk of createReadStream(path, { fd, autoClose: false, start: 0, end: st.size - 1 })) h.update(chunk as Buffer);
+  } finally { closeSync(fd); }
+  return h.digest("hex");
+}
+
+/** Immediately before the CLI is started: the snapshot must still be exactly what was copied, nothing more or less. */
+async function verifySnapshot(holder: string, name: string, actions: readonly SnapshotAction[], copied: ReadonlyMap<string, CopiedFile>): Promise<void> {
+  const top = readdirSync(holder);
+  if (top.length !== 1 || top[0] !== name) throw new Error("refusing to upload: the snapshot was modified (unexpected top-level entries)");
+  if (actions.some((a) => a.op === "mkdir" && a.rel === "")) {
+    const expected = new Set(actions.filter((a) => a.rel !== "").map((a) => a.rel));
+    const walk = (dir: string, rel: string): void => {
+      for (const n of readdirSync(dir)) {
+        const r = rel === "" ? n : `${rel}/${n}`;
+        if (!expected.delete(r)) throw new Error(`refusing to upload: the snapshot was modified (unexpected entry ${showValue(r, 80, 30)})`);
+        if (lstatSync(join(dir, n)).isDirectory()) walk(join(dir, n), r);
+      }
+    };
+    walk(join(holder, name), "");
+    if (expected.size > 0) throw new Error("refusing to upload: the snapshot was modified (entries are missing)");
+  }
+  for (const [rel, c] of copied) {
+    const st = lstatSync(c.dst);
+    if (!st.isFile() || st.nlink !== 1 || st.size !== c.size || st.dev !== c.dev || st.ino !== c.ino || st.mtimeMs !== c.mtimeMs) {
+      throw new Error(`refusing to upload: the snapshot was modified (${showValue(rel, 80, 30)})`);
+    }
+    if ((await sha256File(c.dst)) !== c.sha256) throw new Error(`refusing to upload: the snapshot was modified (${showValue(rel, 80, 30)} content)`);
+  }
+}
+
+export interface SnapshotOptions {
+  /** Plans (manifests) returned by precheckUpload, one per path: the fresh scan must match them exactly. */
+  approved?: readonly (readonly SnapshotAction[])[];
+  /** Test seams (fault injection): run after the scan, before each copy / right before `fn`. */
+  hooks?: { beforeCopy?: (rel: string, source: string) => void; beforeSpawn?: (snapshotPaths: readonly string[]) => void };
+}
+
+const sameAction = (a: SnapshotAction, b: SnapshotAction): boolean =>
+  a.op === b.op && a.rel === b.rel &&
+  (a.op === "mkdir" || (b.op === "copy" && a.size === b.size && a.dev === b.dev && a.ino === b.ino && a.mtimeMs === b.mtimeMs));
+
 /**
  * Snapshots every path into a private staging directory and runs `fn` with the snapshot paths (same order, same
- * base names). The staging directory is always removed. Nothing is passed to `fn` unless every path was accepted.
+ * base names). The staging directory is always removed. `fn` only runs if every path was accepted, matches the
+ * approved manifest, and the snapshot still verifies right before the call.
  */
-export async function withUploadSnapshot<T>(localPaths: readonly string[], fn: (snapshotPaths: string[]) => Promise<T>): Promise<T> {
+export async function withUploadSnapshot<T>(
+  localPaths: readonly string[], fn: (snapshotPaths: string[]) => Promise<T>, opts: SnapshotOptions = {},
+): Promise<T> {
   const stage = mkdtempSync(join(tmpdir(), "pdmcp-upload-"));
   registerTempDir(stage);
   try {
     const out: string[] = [];
+    const verifiers: Array<() => Promise<void>> = [];
     let total = 0;
     for (let i = 0; i < localPaths.length; i++) {
       const src = localPaths[i] as string;
       const limits = limitsFor(src);
       const actions = planUploadSnapshot(scanTree(src, basename(src)), { ...limits, maxBytes: Math.max(0, limits.maxBytes - total) });
+      const approved = opts.approved?.[i];
+      if (approved && (approved.length !== actions.length || approved.some((a, k) => !sameAction(a, actions[k] as SnapshotAction)))) {
+        throw new Error(`refusing to upload ${showValue(src, 80, 30)}: it changed after it was approved`);
+      }
       const holder = join(stage, String(i));
       mkdirSync(holder, { mode: 0o700 });
       const dst = join(holder, basename(src));
+      const copied = new Map<string, CopiedFile>();
       for (const a of actions) {
         const target = a.rel === "" ? dst : join(dst, ...a.rel.split("/"));
         const from = a.rel === "" ? src : join(src, ...a.rel.split("/"));
-        if (a.op === "mkdir") mkdirSync(target, { mode: 0o700 });
-        else { await copyRegular(from, target, a.size); total += a.size; }
+        if (a.op === "mkdir") { mkdirSync(target, { mode: 0o700 }); continue; }
+        opts.hooks?.beforeCopy?.(a.rel, from);
+        copied.set(a.rel, await copyRegular(from, target, a));
+        total += a.size;
       }
+      verifiers.push(() => verifySnapshot(holder, basename(src), actions, copied));
       out.push(dst);
     }
+    opts.hooks?.beforeSpawn?.(out);
+    for (const v of verifiers) await v();
     return await fn(out);
   } finally {
     try { rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
