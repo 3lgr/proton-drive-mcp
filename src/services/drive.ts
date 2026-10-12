@@ -17,6 +17,9 @@ import { runDrive as defaultRunDrive, runDriveRaw as defaultRunDriveRaw } from "
 import { DriveNotAuthenticatedError, DriveParseError } from "../utils/errors.js";
 import { validateName } from "../utils/validation.js";
 import { invalidatePath } from "./walk.js";
+import { ROOT_PATHS, TRASH_ITEM_RE, assertMutablePath, assertDestinationFolder, assertCreatable, isRootPath } from "../policy/remoteRoots.js";
+
+export { ROOT_PATHS };
 
 // A trashed item shows up in the trash listings, so cached trash walks go stale too.
 function invalidateTrashAnd(path: string): void {
@@ -127,9 +130,6 @@ function assertItemsOk(result: unknown, action: string): void {
   }
 }
 
-// Confirmed live: `sharing status /my-files` fails with "Error decrypting
-// session keys" — roots are not shareable nodes.
-export const ROOT_PATHS = new Set(["/my-files", "/photos", "/albums", "/trash", "/photos-trash", "/shared-with-me", "/shared-by-me", "/devices"]);
 
 // Strips "<package-name>@" and "+<hash>" from a version token like
 // "cli-drive@0.8.0+06e8c605", leaving "0.8.0". Falls back to the raw
@@ -297,6 +297,7 @@ export class DriveService {
     folderConflictStrategy: FolderConflictStrategy = "skip",
     skipThumbnails = false
   ): Promise<UploadResult> {
+    assertDestinationFolder(remotePath, "upload");
     // finally: a partly completed upload that then fails also changes the tree.
     let result: unknown;
     try {
@@ -354,6 +355,7 @@ export class DriveService {
 
   // The CLI has no `mkdir` — it's `create-folder <parentPath> <name>`.
   async mkdir(remotePath: string): Promise<void> {
+    assertCreatable(remotePath);
     const { parent, name } = splitRemotePath(remotePath);
     if (!name || parent === remotePath) {
       throw new Error(`path must include a folder name to create: ${remotePath}`);
@@ -379,6 +381,7 @@ export class DriveService {
   // Renames in place — does not move to a different folder. Returns the
   // renamed node (raw pass-through).
   async rename(remotePath: string, newName: string): Promise<unknown> {
+    assertMutablePath(remotePath, "rename");
     try { return await this.run(["filesystem", "rename", remotePath, newName]); } finally { invalidatePath(remotePath); }
   }
 
@@ -393,6 +396,8 @@ export class DriveService {
   //  - the source's *own* name taken in the destination folder (the interim
   //    name after `move`) -> rename first, then move, instead
   async move(sourcePath: string, destinationPath: string): Promise<void> {
+    assertMutablePath(sourcePath, "move");
+    assertMutablePath(destinationPath, "move onto");
     // finally: a half-done move (moved, rename failed) also changes the tree.
     try { await this.moveImpl(sourcePath, destinationPath); } finally { invalidatePath(sourcePath); invalidatePath(destinationPath); }
   }
@@ -466,7 +471,7 @@ export class DriveService {
   // /trash or /photos-trash (the CLI rejects live paths). No --confirm flag
   // exists on the CLI side; our own confirmed-gate lives in the MCP layer.
   async delete(remotePath?: string, uid?: string): Promise<void> {
-    const target = await this.resolveTrashTarget(remotePath, uid);
+    const target = await this.resolveTrashTarget(remotePath, uid, true);
     try { assertItemsOk(await this.run(["filesystem", "delete", target]), "Delete"); } finally { invalidatePath(target); }
   }
 
@@ -484,7 +489,7 @@ export class DriveService {
   // nonProtonInvitations, not members — reading only `members` made a real,
   // successfully-sent invite completely invisible from this tool.
   async shareStatus(remotePath: string): Promise<ShareStatus> {
-    if (ROOT_PATHS.has(remotePath)) {
+    if (isRootPath(remotePath)) {
       throw new Error(`Roots cannot be shared — pass a file or folder inside it: ${remotePath}`);
     }
     const result = await this.run(["sharing", "status", remotePath]);
@@ -522,6 +527,7 @@ export class DriveService {
     role: ShareRole,
     message?: string
   ): Promise<void> {
+    assertMutablePath(remotePath, "share");
     await this.run([
       "sharing", "invite",
       ...(message ? ["--message", message] : []),
@@ -576,6 +582,7 @@ export class DriveService {
     password?: string,
     expiration?: string
   ): Promise<PublicLink> {
+    assertMutablePath(remotePath, "create a public link for");
     let droppedProtection = false;
     if (!password || !expiration) {
       const before = await this.shareStatus(remotePath).catch(() => undefined);
@@ -593,6 +600,7 @@ export class DriveService {
   }
 
   async shareRemoveUrl(remotePath: string): Promise<void> {
+    assertMutablePath(remotePath, "remove the public link of");
     await this.run(["sharing", "remove-url", remotePath]);
   }
 
@@ -619,6 +627,7 @@ export class DriveService {
   }
 
   async trash(remotePath: string): Promise<void> {
+    assertMutablePath(remotePath, "trash");
     try { assertItemsOk(await this.run(["filesystem", "trash", remotePath]), "Trash"); } finally { invalidateTrashAnd(remotePath); }
   }
 
@@ -666,9 +675,14 @@ export class DriveService {
   // photos, where a same-named pair is easy to end up with.
   // The lookup and the CLI call are two steps, so an item trashed under the
   // same name in between is not detected.
-  async resolveTrashTarget(remotePath?: string, uid?: string): Promise<string> {
+  async resolveTrashTarget(remotePath?: string, uid?: string, strictShape = false): Promise<string> {
     if (!remotePath && !uid) throw new Error("Provide path or uid (from drive_list_trash).");
-    const root = remotePath?.match(/^\/(trash|photos-trash)\/(?:[^/\\]|\\.)+$/)?.[1];
+    // The CLI only addresses trashed items by name, one level below /trash or /photos-trash. Anything else is
+    // refused here, before a process is spawned, so a live path can never reach `filesystem delete`.
+    if (strictShape && remotePath !== undefined && !TRASH_ITEM_RE.test(remotePath)) {
+      throw new Error(`only items directly inside the trash can be addressed: pass /trash/<name> or /photos-trash/<name> (got ${remotePath}); use drive_trash first, then drive_list_trash for the exact path or uid.`);
+    }
+    const root = remotePath?.match(TRASH_ITEM_RE)?.[1];
     if (!uid && !root) return remotePath as string;
     const trashed = await this.list(`/${root ?? "trash"}`, { includeUid: true });
     let target = remotePath as string;
@@ -700,6 +714,8 @@ export class DriveService {
   // the CLI's `--name`, which is the only way to copy under a new name or
   // duplicate an item inside its own folder.
   async copy(remoteSrc: string, remoteDst: string, newName?: string): Promise<void> {
+    assertMutablePath(remoteSrc, "copy");
+    assertDestinationFolder(remoteDst, "copy");
     const args = ["filesystem", "copy", ...(newName ? ["--name", newName] : []), remoteSrc, remoteDst];
     try { assertItemsOk(await this.run(args), "Copy"); } finally { invalidatePath(remoteDst); }
   }
@@ -732,6 +748,7 @@ export class DriveService {
   }
 
   async shareLeave(remotePath: string): Promise<void> {
+    assertMutablePath(remotePath, "leave");
     assertItemsOk(await this.run(["sharing", "leave", remotePath]), "Leave");
   }
 
