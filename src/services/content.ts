@@ -9,6 +9,7 @@ import { callContext } from "../utils/subprocess.js";
 import { safeDownload, freezeDownload } from "./downloadGuard.js";
 import { retryOnLocked } from "../utils/lockRetry.js";
 import { showValue } from "../utils/text.js";
+import { strMarker } from "../utils/safeOutput.js";
 
 export const DEFAULT_MAX_CHARS = 20_000;
 export const MAX_MAX_CHARS = 100_000;
@@ -134,7 +135,7 @@ export async function readDriveContent(drive: DriveService, args: ReadContentArg
     throw new Error(`${showValue(path)} is a Proton Docs/Sheets document; the CLI cannot download these, so its text cannot be read.`);
   }
   const format = pickFormat(path, mediaType);
-  if (!format) throw new Error(`unsupported format for ${showValue(path)}${mediaType ? ` (${showValue(mediaType, 60, 20)})` : ""}. Supported: ${SUPPORTED}.`);
+  if (!format) throw new Error(`unsupported format for ${showValue(path)}${mediaType ? ` (${strMarker(mediaType)})` : ""}. Supported: ${SUPPORTED}.`);
   const cap = readMaxBytes();
   // claimedSize is uploader-controlled: a lying claim only costs download bandwidth, since the
   // post-download lstat size check still applies to the real bytes.

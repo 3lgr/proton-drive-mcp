@@ -2,6 +2,8 @@
 // exists locally (as plain data) and returns the EXACT list of actions that may run. The executor performs only
 // those actions and never re-derives anything from a name.
 //
+// Names come from the remote side: errors carry a marker (length + salted hash), never the name itself.
+//
 // Rules (fail closed: anything not explicitly allowed throws and nothing is promoted):
 //   - an absent target is simply placed;
 //   - an existing symlink, FIFO, socket or device at a target always refuses;
@@ -10,7 +12,7 @@
 //   - merge  : directory onto directory only, children are planned one by one, existing files are never overwritten;
 //   - remove : same type only. A file replaces a regular file; a directory replaces an EMPTY directory.
 //              A non-empty local directory is never deleted, and a type mismatch refuses.
-import { showValue } from "../utils/text.js";
+import { strMarker } from "../utils/safeOutput.js";
 
 const CONTROL_RE = new RegExp("[\\x00-\\x1f\\x7f\\u2028\\u2029]");
 // Bidi overrides/isolates, zero-width and BOM characters: names that look like something else.
@@ -21,12 +23,12 @@ export interface EntryNameOptions { top?: boolean }
 /** Throws unless `name` is one plain path component. `top` additionally refuses leading-dot names. */
 export function assertSafeEntryName(name: string, opts: EntryNameOptions = {}): void {
   if (name === "") throw new Error("unsafe entry name: empty name");
-  if (name === "." || name === "..") throw new Error(`unsafe entry name: ${showValue(name)}`);
-  if (name.includes("/") || name.includes("\\")) throw new Error(`unsafe entry name (contains a path separator): ${showValue(name)}`);
-  if (CONTROL_RE.test(name)) throw new Error(`unsafe entry name (control characters): ${showValue(name)}`);
-  if (SPOOF_RE.test(name)) throw new Error(`unsafe entry name (invisible or direction-control characters): ${showValue(name)}`);
+  if (name === "." || name === "..") throw new Error(`unsafe entry name: ${strMarker(name)}`);
+  if (name.includes("/") || name.includes("\\")) throw new Error(`unsafe entry name (contains a path separator): ${strMarker(name)}`);
+  if (CONTROL_RE.test(name)) throw new Error(`unsafe entry name (control characters): ${strMarker(name)}`);
+  if (SPOOF_RE.test(name)) throw new Error(`unsafe entry name (invisible or direction-control characters): ${strMarker(name)}`);
   if (opts.top && name.startsWith(".")) {
-    throw new Error(`refusing to download an item whose name starts with '.': ${showValue(name)}. Dotfiles and dot-folders can configure the local machine (shell, ssh, git); rename the item in Drive first.`);
+    throw new Error(`refusing to download an item whose name starts with '.': ${strMarker(name)}. Dotfiles and dot-folders can configure the local machine (shell, ssh, git); rename the item in Drive first.`);
   }
 }
 
@@ -65,15 +67,15 @@ const SENSITIVE_UNDER_GIT = new Set(["hooks", "config"]); // .git/hooks/* run co
 
 /** Every node below (and including) `node` must be a plain file or folder with a safe, non-colliding name. */
 function assertTreeAcceptable(node: StagedNode, top: boolean, parent = ""): asserts node is StagedNode & { kind: "file" | "dir" } {
-  if (node.kind !== "file" && node.kind !== "dir") throw new Error(`download refused: ${showValue(node.name)} is a ${node.kind}, not a regular file or folder`);
+  if (node.kind !== "file" && node.kind !== "dir") throw new Error(`download refused: ${strMarker(node.name)} is a ${node.kind}, not a regular file or folder`);
   assertSafeEntryName(node.name, { top });
   if (SENSITIVE_DIRS.has(node.name.toLowerCase()) || (parent.toLowerCase() === ".git" && SENSITIVE_UNDER_GIT.has(node.name.toLowerCase()))) {
-    throw new Error(`download refused: ${showValue(node.name)} would configure or authenticate something on this machine`);
+    throw new Error(`download refused: ${strMarker(node.name)} would configure or authenticate something on this machine`);
   }
   const seen = new Set<string>();
   for (const c of node.children) {
     const k = foldKey(c.name);
-    if (seen.has(k)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(c.name)}`);
+    if (seen.has(k)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${strMarker(c.name)}`);
     seen.add(k);
     assertTreeAcceptable(c, false, node.name);
   }
@@ -85,7 +87,7 @@ function planNode(node: StagedNode, srcParent: string, dstParent: string, top: b
   const dstRel = join(dstParent, node.name);
   const ex = lookup(dstRel);
   if (ex === undefined) { out.push({ op: "place", srcRel, dstRel, kind: node.kind }); return; }
-  if (ex.kind !== "file" && ex.kind !== "dir") throw new Error(`download refused: ${showValue(dstRel)} exists locally as a ${ex.kind}`);
+  if (ex.kind !== "file" && ex.kind !== "dir") throw new Error(`download refused: ${strMarker(dstRel)} exists locally as a ${ex.kind}`);
 
   const strategy = node.kind === "dir" ? policy.folder : policy.file;
   switch (strategy) {
@@ -98,21 +100,21 @@ function planNode(node: StagedNode, srcParent: string, dstParent: string, top: b
       return;
     }
     case "merge":
-      if (node.kind !== "dir" || ex.kind !== "dir") throw new Error(`download refused: merge only combines a folder with a folder (${showValue(dstRel)})`);
+      if (node.kind !== "dir" || ex.kind !== "dir") throw new Error(`download refused: merge only combines a folder with a folder (${strMarker(dstRel)})`);
       for (const child of node.children) planNode(child, srcRel, dstRel, false, policy, lookup, out);
       return;
     case "remove":
-      if (policy.folder === "merge" && dstParent !== "" && !top) throw new Error(`download refused: merge never overwrites existing files (${showValue(dstRel)}); use rename or skip`);
-      if (node.kind !== ex.kind) throw new Error(`download refused: ${showValue(dstRel)} is a ${ex.kind} locally but a ${node.kind} remotely`);
+      if (policy.folder === "merge" && dstParent !== "" && !top) throw new Error(`download refused: merge never overwrites existing files (${strMarker(dstRel)}); use rename or skip`);
+      if (node.kind !== ex.kind) throw new Error(`download refused: ${strMarker(dstRel)} is a ${ex.kind} locally but a ${node.kind} remotely`);
       if (node.kind === "file") {
         out.push({ op: "unlink", dstRel }, { op: "place", srcRel, dstRel, kind: "file" });
         return;
       }
-      if (ex.empty !== true) throw new Error(`download refused: ${showValue(dstRel)} is a non-empty local folder and is never deleted; use merge or rename`);
+      if (ex.empty !== true) throw new Error(`download refused: ${strMarker(dstRel)} is a non-empty local folder and is never deleted; use merge or rename`);
       out.push({ op: "rmdir", dstRel }, { op: "place", srcRel, dstRel, kind: "dir" });
       return;
     default:
-      throw new Error(`unknown conflict strategy ${showValue(String(strategy))}`);
+      throw new Error(`unknown conflict strategy ${strMarker(String(strategy))}`);
   }
 }
 
@@ -122,7 +124,7 @@ export function planDownload(top: readonly StagedNode[], lookup: Lookup, policy:
   const seen = new Set<string>();
   for (const node of top) {
     const key = node.name.normalize("NFC").toLowerCase();
-    if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(node.name)}`);
+    if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${strMarker(node.name)}`);
     seen.add(key);
     planNode(node, "", "", true, policy, lookup, out);
   }

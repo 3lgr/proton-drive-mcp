@@ -17,6 +17,7 @@ import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
 import { assertLocalPathAllowed } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
+import { strMarker } from "../utils/safeOutput.js";
 import { approvalField } from "../policy/untrusted.js";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
 import type { DownloadResult, TransferSummary } from "../types/index.js";
@@ -157,7 +158,7 @@ export function scanStaged(stageRoot: string): StagedNode[] {
     for (const name of readdirSync(dir).sort()) {
       assertSafeEntryName(name);
       const key = name.normalize("NFC").toLowerCase();
-      if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(name)}`);
+      if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${strMarker(name)}`);
       seen.add(key);
       if (++entries > MAX_ENTRIES) throw new Error(`download refused: more than ${MAX_ENTRIES} entries`);
       const full = join(dir, name);
@@ -168,7 +169,7 @@ export function scanStaged(stageRoot: string): StagedNode[] {
         const children = scan(full, depth + 1);
         out.push({ name, kind: "dir", children, files: children.reduce((n, c) => n + c.files, 0) });
       } else if (st.isFile()) {
-        if (st.nlink > 1) throw new Error(`download refused: ${showValue(name)} is a hardlink`);
+        if (st.nlink > 1) throw new Error(`download refused: ${strMarker(name)} is a hardlink`);
         bytes += st.size;
         if (bytes > max) throw new Error(`download refused: more than PROTON_DRIVE_DOWNLOAD_MAX_BYTES (${max}) arrived`);
         chmodSync(full, (0o666 & ~mask & 0o644) | 0o600);
@@ -250,7 +251,7 @@ async function staged<T>(
     const realStage = realpathSync.native(stage);
     const top = scanStaged(realStage);
     if (expectTop !== null && top.some((n) => n.name !== expectTop)) {
-      throw new Error(`download refused: unexpected entries arrived (${top.filter((n) => n.name !== expectTop).slice(0, 3).map((n) => showValue(n.name, 40, 10)).join(", ")})`);
+      throw new Error(`download refused: unexpected entries arrived (${top.filter((n) => n.name !== expectTop).slice(0, 3).map((n) => strMarker(n.name)).join(", ")})`);
     }
     if (!transient) for (const n of top) assertLocalPathAllowed(join(realDest, n.name)); // on the resolved destination, right before use
     const actions = planDownload(top, (rel) => kindOf(join(realDest, ...rel.split("/"))), policy);

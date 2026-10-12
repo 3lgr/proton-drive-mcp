@@ -16,6 +16,7 @@ import type {
 import { runDrive as defaultRunDrive, runDriveRaw as defaultRunDriveRaw } from "../utils/subprocess.js";
 import { DriveNotAuthenticatedError, DriveParseError } from "../utils/errors.js";
 import { validateName } from "../utils/validation.js";
+import { strMarker } from "../utils/safeOutput.js";
 import { invalidatePath } from "./walk.js";
 import {
   unwrapResult, escapeNameForPath, unescapeName, splitRemotePath, joinRemote, assertItemsOk, extractSemver, trimNode, revisionMeta, mapPhoto,
@@ -49,6 +50,12 @@ export type PhotoDownloadConflictStrategy = "rename" | "remove" | "skip";
 export {
   unescapeName, splitRemotePath, joinRemote,
 } from "./driveShape.js";
+
+/** What the CLI returned, without its content: the JSON type and a marker (length + salted hash), never the text. */
+function describeShape(v: unknown): string {
+  const kind = v === null ? "null" : Array.isArray(v) ? "an array" : typeof v === "object" ? "an object" : `a ${typeof v}`;
+  return `${kind} ${strMarker(JSON.stringify(v) ?? String(v))}`;
+}
 
 /** A trashed item is one real entry directly below the trash root: never "." or ".." (they would resolve to a folder). */
 function assertTrashTargetSane(target: string): void {
@@ -124,7 +131,7 @@ export class DriveService {
   async listEntries(remotePath: string, opts: { includeUid?: boolean; type?: "file" | "folder" } = {}): Promise<{ item: Record<string, unknown>; file: DriveFile }[]> {
     const result = await this.run(opts.type ? ["filesystem", "list", "-t", opts.type, remotePath] : ["filesystem", "list", remotePath]);
     if (result === null) return [];
-    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from list, got: ${JSON.stringify(result).slice(0, 100)}`);
+    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from list, got ${describeShape(result)}`);
     // The CLI's order changes between calls and callers page by re-listing, so
     // impose a total order: name, then uid (names are not unique).
     const uidOf = (item: Record<string, unknown>) => (typeof item.uid === "string" ? item.uid : "");
@@ -594,7 +601,7 @@ export class DriveService {
   async listInvitations(): Promise<DriveInvitation[]> {
     const result = await this.run(["invitation", "list"]);
     if (result === null) return [];
-    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from invitation list, got: ${JSON.stringify(result).slice(0, 100)}`);
+    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from invitation list, got ${describeShape(result)}`);
     return result.map((item: Record<string, unknown>) => {
       const node = (item.node ?? {}) as Record<string, unknown>;
       // addedByEmail is also a verified Result<string,...>, same as name —
@@ -631,7 +638,7 @@ export class DriveService {
   async listAlbums(): Promise<Album[]> {
     const result = await this.run(["album", "list"]);
     if (result === null) return [];
-    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from album list, got: ${JSON.stringify(result).slice(0, 100)}`);
+    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from album list, got ${describeShape(result)}`);
     return result.map((item: Record<string, unknown>) => {
       const albumInfo = (item.album ?? {}) as Record<string, unknown>;
       return {
@@ -699,7 +706,7 @@ export class DriveService {
     if (loadDetails) args.push("--load-details");
     const result = await this.run(args);
     if (result === null) return [];
-    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from album photos, got: ${JSON.stringify(result).slice(0, 100)}`);
+    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from album photos, got ${describeShape(result)}`);
     return result.map((item: Record<string, unknown>) => mapPhoto(item));
   }
 
@@ -720,7 +727,7 @@ export class DriveService {
     if (loadDetails) args.push("--load-details");
     const result = await this.run(args);
     if (result === null) return [];
-    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from photo timeline, got: ${JSON.stringify(result).slice(0, 100)}`);
+    if (!Array.isArray(result)) throw new DriveParseError(`Expected array from photo timeline, got ${describeShape(result)}`);
     // Without --load-details the CLI returns {nodeUid, captureTime, tags}.
     // With --load-details it returns full node objects ({uid, name, mediaType,
     // creationTime, totalStorageSize, photo: {captureTime, tags}, ...}) —
