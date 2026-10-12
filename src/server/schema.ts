@@ -13,7 +13,7 @@ export type ToolDef = {
 export function checkArgs(def: ToolDef, a: Record<string, unknown>): string | undefined {
   const props = def.inputSchema.properties;
   for (const k of Object.keys(a)) {
-    if (!(k in props)) return `Unknown argument '${k}'. Allowed: ${Object.keys(props).join(", ") || "(none)"}.`;
+    if (!Object.hasOwn(props, k)) return `Unknown argument '${k}'. Allowed: ${Object.keys(props).join(", ") || "(none)"}.`;
   }
   for (const k of def.inputSchema.required ?? []) {
     if (a[k] === undefined || a[k] === null) return `Missing required argument '${k}'.`;

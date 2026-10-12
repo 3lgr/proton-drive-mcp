@@ -47,7 +47,7 @@ describe("tool tier", () => {
   // +~600 in 2.0.0: drive_invitation_accept is now gated (confirmed property + description).
   it("tools/list stays within the size budget", () => {
     assert.ok(size(full) <= 41_000, `full ${size(full)} bytes`);
-    assert.ok(size(core) <= 18_300, `core ${size(core)} bytes`);
+    assert.ok(size(core) <= 18_800, `core ${size(core)} bytes`);
   });
 
   it("core refuses a hidden tool at call time without touching the CLI", async () => {

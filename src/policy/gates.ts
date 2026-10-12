@@ -98,6 +98,18 @@ export const GATES: Readonly<Record<string, GateSpec>> = {
     describe: { when: "when the file already exists (it would be overwritten)" },
     consequence: "would overwrite an existing file in the sync folder.",
   },
+  // Moving or copying into a folder that is ALREADY shared exposes the item to its members. The handlers set
+  // `sharedDestination` (never the model: the schema has no such argument) after looking the destination up.
+  drive_move: {
+    strict: false, cliConfirm: false, describe: { when: "when the destination folder is already shared with other people (the item would become visible to them)" },
+    applies: (a) => a.sharedDestination === true,
+    consequence: "moves the item into a folder that is already shared with other people, so they will be able to see it.",
+  },
+  drive_copy: {
+    strict: false, cliConfirm: false, describe: { when: "when the destination folder is already shared with other people (the copy would become visible to them)" },
+    applies: (a) => a.sharedDestination === true,
+    consequence: "copies the item into a folder that is already shared with other people, so they will be able to see the copy.",
+  },
   photos_remove_from_album: {
     strict: false, applies: always, describe: "always", cliConfirm: false,
     consequence: "removes a photo from the album.",

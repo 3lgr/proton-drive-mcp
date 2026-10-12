@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { createReadStream, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { ROOT_PATHS, splitRemotePath, joinRemote, type DriveService } from "./drive.js";
+import { splitRemotePath, joinRemote, type DriveService } from "./drive.js";
+import { isRootPath } from "../policy/remoteRoots.js";
 import { walkTree, staleFields, partialFields, type WalkResult } from "./walk.js";
 import { globMatch } from "../utils/glob.js";
 import { validateLocalPath, validateRemotePath } from "../utils/validation.js";
@@ -32,7 +33,8 @@ export interface SyncDiff {
 
 export function makeIgnore(patterns: string[]): (relPath: string) => boolean {
   // Glob subset (see utils/glob.ts). A pattern without '/' matches any path segment.
-  const compiled = patterns.map((p) => ({ glob: p.replace(/\/+$/, ""), bySegment: !p.replace(/\/+$/, "").includes("/") }));
+  const trimSlashes = (p: string): string => { let e = p.length; while (e > 0 && p[e - 1] === "/") e--; return p.slice(0, e); };
+  const compiled = patterns.map((p) => ({ glob: trimSlashes(p), bySegment: !trimSlashes(p).includes("/") }));
   return (relPath) => {
     const segs = relPath.split("/");
     return compiled.some(({ glob, bySegment }) =>
@@ -189,7 +191,7 @@ function sourceProblems(sources: string[], listing: Listing): BulkProblem[] {
   for (const s of sources) {
     if (seen.has(s)) { problems.push({ source: s, problem: "listed more than once" }); continue; }
     seen.add(s);
-    if (ROOT_PATHS.has(s) || s === "/") { problems.push({ source: s, problem: "is a root and cannot be used" }); continue; }
+    if (isRootPath(s)) { problems.push({ source: s, problem: "is a root and cannot be used" }); continue; }
     const other = sources.find((o) => o !== s && isUnder(s, o));
     if (other) { problems.push({ source: s, problem: `is inside another listed source (${other})` }); continue; }
     const { parent, name } = splitRemotePath(s);
@@ -214,7 +216,7 @@ export function planBulkMove(sources: string[], destination: string, listing: Li
   const already = new Set(problems.map((p) => p.source));
   const names = new Map<string, string>();
   for (const s of sources) {
-    if (already.has(s) || ROOT_PATHS.has(s)) continue;
+    if (already.has(s) || isRootPath(s)) continue;
     const { parent, name } = splitRemotePath(s);
     if (isUnder(destination, s)) { problems.push({ source: s, problem: "destination is the source itself or inside it" }); continue; }
     if (parent === destination) { problems.push({ source: s, problem: "already in the destination folder" }); continue; }
