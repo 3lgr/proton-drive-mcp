@@ -60,6 +60,8 @@ export function fakeEnv(mode, sandbox, extra = {}) {
     // Most suites exercise tool behaviour, not the consent policy: they run as an operator who opted in to
     // unattended destructive tools. Policy suites override this (extra) or run a client with elicitation.
     PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE: "1",
+    // Same for the share policy: suites about plumbing use bare calls; share-policy.test.mjs sets "strict" itself.
+    PROTON_DRIVE_SHARE_POLICY: "off",
     FAKE_MODE: mode,
     FAKE_ARGV_LOG: sandbox.argvLog,
     FAKE_PIDFILE: sandbox.pidFile,
