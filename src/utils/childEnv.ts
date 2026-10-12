@@ -12,7 +12,8 @@ const EXACT = new Set([
   "SYSTEMROOT", "SystemRoot", "WINDIR", "windir", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "USERNAME",
   "HOMEDRIVE", "HOMEPATH", "PROGRAMDATA", "ProgramData", "PROGRAMFILES", "ProgramFiles", "COMPUTERNAME",
 ]);
-const PREFIXES = ["LC_", "XDG_", "PROTON_"];
+// PROTON_DRIVE_* only: other Proton products' variables (PROTON_PASS_*, PROTON_VPN_*...) are not for this CLI.
+const PREFIXES = ["LC_", "XDG_", "PROTON_DRIVE_"];
 
 export function buildChildEnv(parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const extra = (parent["PROTON_DRIVE_PASS_ENV"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);

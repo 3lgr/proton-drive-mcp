@@ -203,7 +203,7 @@ export interface Envelope {
 
 /** Wraps a tool's result. Free-text fields additionally get BEGIN/END markers carrying a per-response nonce. */
 export function wrapUntrusted(tool: string, data: unknown): Envelope {
-  const textFields = UNTRUSTED_TOOLS[tool] ?? [];
+  const textFields = Object.hasOwn(UNTRUSTED_TOOLS, tool) ? UNTRUSTED_TOOLS[tool] ?? [] : [];
   const stats = newStats();
   let content = sanitizeDeep(data, textFields, stats);
   if (textFields.length && content && typeof content === "object" && !Array.isArray(content)) {

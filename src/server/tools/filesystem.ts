@@ -410,7 +410,7 @@ export const FILESYSTEM_TOOLS = [
           localPath: { type: "string", description: "Absolute local folder." },
           drivePath: { type: "string", description: "Absolute remote folder." },
           direction: { type: "string", enum: ["up", "down", "both"], description: "Default up." },
-          ignore: { type: "array", items: { type: "string" }, description: "Globs (default .git, node_modules, .DS_Store)." },
+          ignore: { type: "array", items: { type: "string" }, maxItems: 50, description: "Globs (default .git, node_modules, .DS_Store)." },
           compare: { type: "string", enum: ["size-mtime", "sha1"], description: "Default size-mtime; sha1 hashes same-size files when Drive claims one." },
           limit: { type: "integer", minimum: 1, maximum: 1000, description: "Per list, default 200." },
         },

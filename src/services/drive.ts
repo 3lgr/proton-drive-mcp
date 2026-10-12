@@ -493,10 +493,13 @@ export class DriveService {
   // One batched CLI call; per-item failures surface through assertItemsOk, with
   // the success count added because earlier items may already have been applied.
   async bulkMove(sources: string[], destinationFolder: string): Promise<void> {
+    sources.forEach((s) => assertMutablePath(s, "move"));
+    assertDestinationFolder(destinationFolder, "move into");
     await this.runBatch(["filesystem", "move", ...sources, destinationFolder], "Move", sources.length);
   }
 
   async bulkTrash(paths: string[]): Promise<void> {
+    paths.forEach((p) => assertMutablePath(p, "trash"));
     try { await this.runBatch(["filesystem", "trash", ...paths], "Trash", paths.length); } finally { paths.forEach(invalidateTrashAnd); }
   }
 

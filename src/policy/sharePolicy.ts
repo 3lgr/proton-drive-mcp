@@ -39,7 +39,8 @@ export function checkPublicLink(policy: SharePolicy, r: LinkRequest, now: Date =
     throw new Error(`share policy: a public link needs a password of at least ${MIN_LINK_PASSWORD} characters. ${hint}`);
   }
   if (!r.expiration) throw new Error(`share policy: a public link needs an expiration date (at most ${MAX_LINK_DAYS} days ahead). ${hint}`);
-  if (!/^\d{4}-\d{2}-\d{2}/.test(r.expiration) || Number.isNaN(Date.parse(r.expiration))) {
+  const ISO = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+  if (!ISO.test(r.expiration) || Number.isNaN(Date.parse(r.expiration))) {
     throw new Error("share policy: expiration must be an ISO date such as 2026-12-31");
   }
   const days = (Date.parse(r.expiration) - now.getTime()) / 86_400_000;
