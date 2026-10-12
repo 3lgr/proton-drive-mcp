@@ -9,6 +9,9 @@ import { callContext } from "../dist/utils/subprocess.js";
 import { makeSandbox, startServer } from "./helpers/mcp-client.mjs";
 import { loadOptional, makePdf, skipUnlessOptional, usePrivateTmp } from "./helpers/optional-deps.mjs";
 
+// Document extraction is opt-in (fail closed); these suites test the extractor itself.
+process.env.PROTON_DRIVE_ENABLE_DOC_EXTRACT = "1";
+
 const deps = {};
 // Private TMPDIR per test: readDirs() must only ever see this test's own pdmcp-read-* dirs.
 usePrivateTmp(beforeEach, afterEach);

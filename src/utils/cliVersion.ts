@@ -1,6 +1,6 @@
 /** CLI major.minor this server is tested against (live-tested: CLI 0.8.0, SDK js 0.21.0). */
 export const TESTED_CLI = "0.8";
-export const ISSUES_URL = "https://github.com/googlarz/proton-drive-mcp/issues";
+export const ISSUES_URL = "https://github.com/3lgr/proton-drive-mcp/issues";
 
 /** Extracts the CLI's "major.minor" from `proton-drive version` output ("Proton Drive CLI cli-drive@0.8.0+abc"), or undefined. */
 export function parseCliMajorMinor(text: string): string | undefined {

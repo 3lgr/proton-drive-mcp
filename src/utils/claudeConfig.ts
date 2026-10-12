@@ -67,7 +67,7 @@ export function isEphemeralInstall(p: string): boolean {
 export function buildEntry(cliPath: string, syncPath?: string): McpEntry {
   const entryPath = serverEntryPath();
   if (isEphemeralInstall(entryPath)) {
-    throw new Error(`${entryPath} is in a temporary npx cache and would stop working once the cache is pruned. Install it first (npm install -g proton-drive-mcp) and run proton-drive-cli from there.`);
+    throw new Error(`${entryPath} is in a temporary npx cache and would stop working once the cache is pruned. Install it first (see "Install" in the README: npm install -g github:3lgr/proton-drive-mcp#<tag>) and run proton-drive-cli from there.`);
   }
   const env: Record<string, string> = { PROTON_DRIVE_BIN: cliPath };
   if (syncPath) env["PROTON_DRIVE_SYNC_PATH"] = syncPath;

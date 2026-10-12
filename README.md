@@ -1,68 +1,80 @@
-```
-  ____  ____   ___ _____ ___  _   _   ____  ____  _____     _______ 
- |  _ \|  _ \ / _ \_   _/ _ \| \ | | |  _ \|  _ \|_ _\ \   / / ____|
- | |_) | |_) | | | || || | | |  \| | | | | | |_) || | \ \ / /|  _|  
- |  __/|  _ <| |_| || || |_| | |\  | | |_| |  _ < | |  \ V / | |___ 
- |_|   |_| \_\\___/ |_| \___/|_| \_| |____/|_| \_\___|  \_/  |_____|
-  MCP server and CLI · Full Proton Drive control for Claude
-```
+# proton-drive-mcp (hardened fork)
 
-<div align="center">
-
-[![npm version](https://img.shields.io/npm/v/proton-drive-mcp?color=%236d4aff&label=npm)](https://www.npmjs.com/package/proton-drive-mcp)
-[![CI](https://github.com/googlarz/proton-drive-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/googlarz/proton-drive-mcp/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/3lgr/proton-drive-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/3lgr/proton-drive-mcp/actions/workflows/ci.yml)
+[![License: MIT](LICENSE)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
-[![GitHub stars](https://img.shields.io/github/stars/googlarz/proton-drive-mcp?style=social)](https://github.com/googlarz/proton-drive-mcp)
-[![Last commit](https://img.shields.io/github/last-commit/googlarz/proton-drive-mcp?color=brightgreen&label=last%20commit)](https://github.com/googlarz/proton-drive-mcp/commits/main)
-[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/googlarz/proton-drive-mcp)
-[![proton-drive-mcp MCP server](https://glama.ai/mcp/servers/googlarz/proton-drive-mcp/badges/score.svg)](https://glama.ai/mcp/servers/googlarz/proton-drive-mcp)
 
-</div>
+An MCP server (and companion CLI) that lets an AI assistant such as Claude work with **Proton Drive** and **Proton
+Photos** through the official `proton-drive` command-line client: browse, search, upload, download, share, trash and
+restore, with end-to-end encryption left to Proton's own CLI. This fork keeps the 47 tools of the upstream project and
+puts the safety controls **in the server, where a manipulated model cannot talk its way past them**.
 
----
+> **Unofficial.** This is an independent fork of [googlarz/proton-drive-mcp](https://github.com/googlarz/proton-drive-mcp)
+> (MIT, v1.5.2). It is **not affiliated with, endorsed by or supported by Proton AG**. "Proton" and "Proton Drive" are
+> trademarks of Proton AG. You need the official CLI installed and signed in; this project never handles your password.
+> Security issues: see [SECURITY.md](SECURITY.md).
 
-Give Claude Desktop (or any MCP client) full access to your Proton Drive and Proton Photos: list folders, upload and download files, invite collaborators, manage sharing, handle trash, and manage photo albums — all with end-to-end encryption intact. The same capabilities are available as a full CLI for scripting, backups, and cron.
+## Why this fork
 
-## Quick start (60 seconds)
+An assistant that can delete, share and download files is only as safe as the weakest rule that a prompt injection
+(a file name, an invitation text, a document) can talk it out of. Version 2.0.0 moves those rules into code:
+
+| Area | What changed |
+|---|---|
+| **Consent the model cannot fake** | One gate table (`src/policy/gates.ts`). With a client that supports MCP elicitation the human is **always** asked, whatever `confirmed` the model sent. Without it, irreversible or outward-facing tools (empty trash, permanent delete, sharing, public links, logout, invitation accept/reject, local `remove`) **fail closed** unless you set `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE=1`. Prompts show values with every non-ASCII character escaped. |
+| **Local files** | Downloads go through a private staging directory and a pure plan (no symlinks, hardlinks, FIFOs, dot-names, traversal or overwrites; `remove` never deletes a non-empty folder). Uploads run from a frozen, hashed snapshot of the validated tree (no secrets, no symlinks), bound to what was approved. Wider credential denylist; `PROTON_DRIVE_LOCAL_ROOT` narrows access without switching the denylist off; case-insensitive on macOS/Windows. |
+| **Remote paths** | Drive roots are never the subject of a mutation; `drive_delete` accepts only `/trash/<name>` or `/photos-trash/<name>`. |
+| **Sharing policy** | Public links through the tools must be viewer-only, password-protected (8+ characters) and expire within 90 days; no `admin` invitations; optional domain allowlist; strict e-mail/role canonicalisation (`PROTON_DRIVE_SHARE_POLICY`, `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS`). |
+| **Untrusted content** | Everything that carries text written by others (names, paths, invitations, file content) is returned in an `{untrusted, source, notice, content}` envelope, sanitised by a linear Unicode-category scanner with visible `⟦removed:…⟧` markers and a per-response delimiter. Hidden Word text (`w:vanish`) is dropped and reported. |
+| **The CLI binary** | Run by absolute path with a minimal environment; optional `PROTON_DRIVE_BIN_SHA256` pin: only a verified private copy is executed. `doctor` warns about unpinned, PATH-resolved or group/world-writable binaries. |
+| **Parsing** | PDF/DOCX are parsed in a separate Node process under the permission model (no writes, no child processes, no workers), with heap, time and output caps, a streaming byte budget and zip checks (duplicate/absolute names, entry count, expansion ratio, DOCTYPE). |
+| **Logs and errors** | Allowlist model: error codes with fixed text and length+hash markers instead of CLI output, paths, links or e-mail addresses. |
+| **Supply chain** | `@modelcontextprotocol/sdk` updated and `proxy-addr` overridden (`npm audit` clean); release workflows split into verify/publish jobs, pinned npm, SHA256SUMS and build-provenance attestation, no overwrites; Docker base pinned by digest; manual `npm publish` is blocked. |
+| **Code** | `index.ts` and `drive.ts` split into cohesive modules; `npm run test:coverage`. |
+
+### New environment variables
+
+| Variable | Purpose |
+|---|---|
+| `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE` | Accept prompt-level `confirmed` for irreversible tools when the client cannot ask the human. |
+| `PROTON_DRIVE_SHARE_POLICY` / `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS` | Sharing policy and invitation domain allowlist. |
+| `PROTON_DRIVE_BIN_SHA256` | Pin the `proton-drive` binary by hash (verified private copy is executed). |
+| `PROTON_DRIVE_PASS_ENV` | Extra environment names (or `PREFIX_*`) to pass to the CLI. |
+| `PROTON_DRIVE_UPLOAD_MAX_BYTES` / `PROTON_DRIVE_DOWNLOAD_MAX_BYTES` | Ceilings for the upload snapshot and for one download. |
+
+The full table is under [Environment variables](#environment-variables). Behaviour changes that can break existing
+setups are listed in the [CHANGELOG](CHANGELOG.md) under 2.0.0.
+
+## Quick start
 
 1. Install the official [Proton Drive CLI](https://proton.me/download/drive/cli/index.html), then sign in once: `proton-drive auth login`.
-2. Connect Claude Desktop, either way:
-   - **Bundle:** install `proton-drive-mcp-<version>.mcpb` from the [latest release](https://github.com/googlarz/proton-drive-mcp/releases/latest) and set **proton-drive CLI path** to the output of `which proton-drive`.
-   - **Global install:** `npm install -g proton-drive-mcp`, then `proton-drive-cli doctor`, then `proton-drive-cli setup-claude-desktop --write`. (`setup-claude-desktop` refuses to run from a temporary `npx` cache, so install globally first.) Fully quit and restart Claude Desktop afterwards.
-3. Try these prompts:
-   - "Find files named *invoice* in my Drive." (`drive_search`)
-   - "What is using my Drive space?" (`drive_usage`)
-   - "Find duplicate files in my Drive." (`drive_find_duplicates`)
-   - "Who has access to my shared folders?" (`drive_sharing_audit`)
-   - "Tidy up /Downloads, show me a plan first." (`drive_bulk_move` / `drive_bulk_trash` preview first, nothing changes until you confirm)
-4. Optional: `PROTON_DRIVE_INDEX=1` keeps a plaintext local copy of file names so searches are instant after a restart ([details](#persistent-index-opt-in)); `PROTON_DRIVE_TOOL_TIER=core` exposes a smaller tool set.
+2. Install this server from the repository (see [Install](#install)) and run `proton-drive-cli doctor`.
+3. Connect your MCP client (Claude Code, Claude Desktop) as shown under [Connect to Claude Desktop](#connect-to-claude-desktop).
+4. Try: "Find files named *invoice*." (`drive_search`), "What is using my Drive space?" (`drive_usage`), "Who has access
+   to my shared folders?" (`drive_sharing_audit`), "Tidy up /Downloads, show me a plan first." (`drive_bulk_move`).
 
----
+**Use a client that supports elicitation** (Claude Code does). Without it the irreversible tools are refused by design.
 
-## Why this, and not just the Proton Drive CLI?
+## Why a server and not just the CLI?
 
-For syncing, backups and cron jobs, **use the official CLI directly**: it is simpler and that is what it is for. This project does not replace it; it needs it, and wraps it so an AI assistant can drive it. It is worth using when you want to work with your Drive by conversation:
-
-- **Things the CLI does not have** (it has no search, recursive listing, usage or content-reading commands, and Drive's end-to-end encryption rules out server-side search): `drive_search`, `drive_tree`, `drive_usage`, `drive_find_duplicates` (verified by sha256), `drive_sharing_audit`, `drive_read_content`, `drive_sync_plan`. They run locally on your computer, so encryption stays intact.
-- **Safe changes by an AI:** destructive or outward-facing actions need explicit confirmation, bulk move/trash is two steps (plan first, then apply), trash is reversible, and the duplicate finder never deletes anything. A bare CLI assumes you know exactly what you are doing.
-- **Rough edges smoothed over:** the CLI reports some per-item failures with exit code 0, returns lists in random order, and can fail with `database is locked` under parallel calls. The server checks per-item results, sorts and paginates lists, and retries read-only calls.
-
-What to expect: search matches names, sizes and dates, not the text of every file (you read one file at a time); the first walk of a large drive takes minutes unless you enable the opt-in [persistent index](#persistent-index-opt-in); and this is an independent project, not an official Proton product.
-
----
+For sync, backups and cron jobs, use the official CLI directly. This project wraps it so an assistant can drive it, and
+adds what the CLI lacks: search, tree, usage, duplicates, sharing audit, content reading and a sync plan, all computed
+locally so encryption stays intact. It also smooths over CLI rough edges (per-item failures with exit code 0, random
+order, `database is locked`) and, in this fork, enforces the policies above. It needs the official CLI; it does not
+replace it.
 
 ## What you get
 
-- **Claude manages your Proton Drive** — list, upload, download, move, share, trash, restore
-- **Proton Photos album management** — list albums, create/delete albums, add and remove photos
-- **Companion CLI** — 45 of the 47 operations, scriptable and pipeable, works in cron and shell scripts (the two sync-folder tools, `drive_read_file` and `drive_write_file`, are MCP-only)
-- **Full Proton Drive CLI command coverage** — all 32 scriptable commands of CLI 0.8.0 have a matching tool (checked against the CLI's own help; `auth login` is the one command excluded, since it's an interactive browser flow). Not every optional flag is exposed: `sharing invite --include-node-name` is deliberately off (it would put the file name in the invitation email in clear text) and the `inherited` invite role is not offered; commands that accept several paths run one path per call except bulk move and bulk trash
-- **Zero credential exposure** — auth is handled entirely by the official Proton Drive CLI; this MCP never touches your password or session token
-- **Shell injection safe** — all CLI calls use `execFile` with discrete argument arrays, never string interpolation
-- **Privacy-native** — end-to-end encryption is handled by Proton's own CLI; this server is just a thin MCP wrapper
+- 47 tools for Drive, sharing, trash, invitations, Photos albums, content reading and analytics (see [Tools](#tools)).
+- A companion CLI for 45 of the 47 operations (the two sync-folder tools are MCP-only). Typed by a human, it uses `--confirm` flags instead of elicitation and is not subject to the sharing policy.
+- No credential handling: authentication lives in the official CLI and your OS keychain.
+- Every CLI call is a `spawn` with a discrete argument array and no shell.
+
+## Credits
+
+Original project: **Dawid Piaskowski** ([googlarz](https://github.com/googlarz)), MIT. This fork: **Elger Rodrigues**
+([3lgr](https://github.com/3lgr)). Both copyright lines are kept in [LICENSE](LICENSE).
 
 ---
 
@@ -70,9 +82,9 @@ What to expect: search matches names, sizes and dates, not the text of every fil
 
 Your files travel: **Proton Drive (cloud, E2E encrypted) → Proton Drive CLI (local, decrypts) → this MCP server (local) → your AI client**.
 
-The Proton Drive CLI handles all cryptography locally. This MCP server calls the CLI as a subprocess and forwards results — it never receives your password, never stores credentials, and never touches the raw encrypted data. Authentication state lives in your OS keychain (macOS Keychain, Linux libsecret; the official CLI also uses Windows Credential Manager on Windows, which this project does not support), managed exclusively by the official Proton CLI.
-
-If you use Claude Desktop with the default Anthropic API, file content you ask Claude to act on is sent to Anthropic per their [privacy policy](https://www.anthropic.com/privacy).
+The CLI does all cryptography locally. This server calls it as a subprocess and forwards results: it never receives your
+password and never stores credentials. Authentication state lives in your OS keychain, managed by the official CLI. If
+you use a hosted model, file content you ask it to act on is sent to that provider under its own privacy policy.
 
 ---
 
@@ -94,18 +106,23 @@ This opens a browser for Proton's standard sign-in flow. Credentials are stored 
 
 ## Install
 
-**Via npx (no install needed):**
+This fork is **not published on npm**. Install it from the repository, pinned to a release tag:
 
 ```bash
-# Used directly in Claude Desktop config — no global install required
-npx -y proton-drive-mcp
+# global install from a tag (builds on install; read the tag's diff first)
+npm install -g github:3lgr/proton-drive-mcp#v2.0.0
+
+# or from a clone
+git clone https://github.com/3lgr/proton-drive-mcp.git
+cd proton-drive-mcp
+git checkout v2.0.0
+npm ci --ignore-scripts && npm run build
+node dist/index.js        # the MCP server
 ```
 
-**Global install:**
-
-```bash
-npm install -g proton-drive-mcp
-```
+Release bundles (`.mcpb`) are attached to GitHub releases with a `SHA256SUMS` file and a build-provenance attestation
+(`gh attestation verify <file> --repo 3lgr/proton-drive-mcp`). Do not run a floating version (`npx -y <name>` with no
+version) of a program that holds your Proton session.
 
 ---
 
@@ -120,15 +137,15 @@ Add to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "proton-drive-mcp": {
-      "command": "npx",
-      "args": ["-y", "proton-drive-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/proton-drive-mcp/dist/index.js"],
       "env": { "PROTON_DRIVE_BIN": "/absolute/path/to/proton-drive" }
     }
   }
 }
 ```
 
-Claude Desktop starts servers with a minimal `PATH`, so a `proton-drive` in `~/.local/bin` is usually not found. Set `PROTON_DRIVE_BIN` to the output of `which proton-drive` (the default install location is `~/.local/bin/proton-drive`, written out in full, e.g. `/Users/you/.local/bin/proton-drive`). If `npx` itself is not found, use its absolute path as `command` (`which npx`).
+Claude Desktop starts servers with a minimal `PATH`, so a `proton-drive` in `~/.local/bin` is usually not found. Set `PROTON_DRIVE_BIN` to the output of `which proton-drive` (the default install location is `~/.local/bin/proton-drive`, written out in full, e.g. `/Users/you/.local/bin/proton-drive`). Use the absolute path of `node` as `command` if Claude Desktop cannot find it (`which node`). `proton-drive-cli setup-claude-desktop --write` writes this entry for you.
 
 Restart Claude Desktop. Check **`+` → Connectors → proton-drive-mcp** to confirm the server is connected.
 
@@ -136,7 +153,7 @@ Restart Claude Desktop. Check **`+` → Connectors → proton-drive-mcp** to con
 
 ### One-click install (MCPB bundle)
 
-Instead of editing JSON, download `proton-drive-mcp-<version>.mcpb` from the [latest GitHub release](https://github.com/googlarz/proton-drive-mcp/releases/latest) and open it (or drag it into **Settings → Extensions** in Claude Desktop). In the extension settings, set **proton-drive CLI path** to the output of `which proton-drive` (usually `~/.local/bin/proton-drive`); optionally set the **Proton Drive sync folder** to enable `drive_read_file` / `drive_write_file`, and the **Persistent search index** switch (off by default; it stores file names in plain text on this computer, see [Persistent index](#persistent-index-opt-in)). You still need the official `proton-drive` CLI installed and `proton-drive auth login` done once.
+Instead of editing JSON, download `proton-drive-mcp-<version>.mcpb` from the [latest GitHub release](https://github.com/3lgr/proton-drive-mcp/releases/latest) and open it (or drag it into **Settings → Extensions** in Claude Desktop). In the extension settings, set **proton-drive CLI path** to the output of `which proton-drive` (usually `~/.local/bin/proton-drive`); optionally set the **Proton Drive sync folder** to enable `drive_read_file` / `drive_write_file`, and the **Persistent search index** switch (off by default; it stores file names in plain text on this computer, see [Persistent index](#persistent-index-opt-in)). You still need the official `proton-drive` CLI installed and `proton-drive auth login` done once.
 
 ### If installed globally
 
@@ -167,7 +184,7 @@ proton-drive-cli setup-claude-desktop [--config <path>] [--sync-path <dir>]
 proton-drive-cli setup-claude-desktop --sync-path "$HOME/Proton Drive" --write
 ```
 
-`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes the absolute path of the running `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g proton-drive-mcp`). The entry pins the current `node` binary, so re-run it after switching Node versions (e.g. with nvm). Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
+`doctor` exits 1 if any check fails (warnings do not fail). It only ever reports on the `proton-drive-mcp` entry of the config, never on other servers. `setup-claude-desktop` writes the absolute path of the running `node`, of this package's `dist/index.js`, and of the resolved `proton-drive` binary (`PROTON_DRIVE_BIN`). It refuses to run if the CLI cannot be found, the config file is not valid JSON, or the package is running from a temporary `npx` cache (install it first with `npm install -g github:3lgr/proton-drive-mcp#v2.0.0`). The entry pins the current `node` binary, so re-run it after switching Node versions (e.g. with nvm). Re-running with unchanged settings leaves the file alone; otherwise the file is replaced atomically and a timestamped `.bak-…` copy is kept.
 
 The default config location is per OS (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME` or `~/.config/Claude/`); use `--config` or the `CLAUDE_DESKTOP_CONFIG` environment variable to point elsewhere. On Windows the CLI lookup honours `PATHEXT`.
 
@@ -433,7 +450,7 @@ The server offers four MCP prompts (also declared in the MCPB manifest): `organi
 | Sharing & invitations | Rarely | Full (invite, revoke, status) |
 | Trash & restore | Rarely | Full |
 | CLI parity | No | The CLI mirrors every MCP tool except `drive_read_file` / `drive_write_file` |
-| Shell injection safe | Varies | Yes — `execFile` only |
+| Shell injection safe | Varies | Yes: `spawn` with argument arrays, no shell |
 
 ---
 
@@ -494,7 +511,7 @@ These come from the upstream `proton-drive` CLI (v0.8.0), not from this server:
 | Linux | CI with a fake CLI only |
 | Windows | Not supported (see [Platform support](#platform-support)) |
 
-`proton-drive-cli doctor` warns when the installed CLI is not 0.8.x, and the server logs one warning line to stderr at startup. Other versions may work but are unverified. If something breaks, open an issue at [github.com/googlarz/proton-drive-mcp/issues](https://github.com/googlarz/proton-drive-mcp/issues) with the output of `proton-drive version` and `proton-drive-cli doctor`.
+`proton-drive-cli doctor` warns when the installed CLI is not 0.8.x, and the server logs one warning line to stderr at startup. Other versions may work but are unverified. If something breaks, open an issue at [github.com/3lgr/proton-drive-mcp/issues](https://github.com/3lgr/proton-drive-mcp/issues) with the output of `proton-drive version` and `proton-drive-cli doctor`.
 
 ## Platform support
 
@@ -528,6 +545,7 @@ Every tool group was live-tested on 2026-09-28 against a real Proton account, **
 | `PROTON_DRIVE_INDEX` | Optional | Set to `1` (or `true`) to keep completed folder walks in a **plaintext** on-disk index so searches are fast after a restart. Off by default. See [Persistent index](#persistent-index-opt-in). |
 | `PROTON_DRIVE_INDEX_DIR` | Optional | Directory for the index file (default: `~/Library/Caches/proton-drive-mcp` on macOS, `$XDG_CACHE_HOME` or `~/.cache/proton-drive-mcp` elsewhere). Use a dedicated directory: if it exists it must be yours with mode `0700` (group/other access is refused); a missing one is created `0700`. The file is `0600`. |
 | `PROTON_DRIVE_INDEX_MAX_AGE_H` | Optional | Oldest saved index data that may be served, in hours (default 24; 0 = never serve saved data). Served data is marked `stale: true` and refreshed in the background (`drive_sync_plan`, `drive_find_duplicates` and the sharing audit never use it). |
+| `PROTON_DRIVE_ENABLE_DOC_EXTRACT` | Optional | Set to `1` to let `drive_read_content` extract text from `.docx` and `.pdf`. **Off by default (fail closed)**: complex document formats keep producing parser differentials (hidden text, archive tricks), so reading them is an accepted risk the operator opts into. Plain text files are always readable. Even when enabled the parser runs in a sandboxed child process, hidden or doubtful Word text is dropped and reported (`hidden_text_dropped`), and the result is delivered in the untrusted-content envelope. |
 | `PROTON_DRIVE_READ_MAX_BYTES` | Optional | Largest file `drive_read_content` will download, in bytes (default 10485760 = 10 MB; values above 52428800 = 50 MB are clamped). Larger files are refused before any download. |
 | `PROTON_DRIVE_READ_TIMEOUT_MS` | Optional | Hard time limit for parsing one `.pdf`/`.docx` in `drive_read_content`, in milliseconds (default 20000; clamped to 1-120000). On expiry the parsing worker is terminated and the call returns an error. |
 | `PROTON_DRIVE_TOOL_TIER` | Optional | `full` (default, all 47 tools) or `core` (19 everyday tools; see [Token cost](#token-cost)). Tools outside the active tier are hidden from `tools/list` and refused at call time. Read once at startup; an unknown value falls back to `full` with a warning on stderr. |
@@ -586,7 +604,7 @@ Windows is not supported (see [Platform support](#platform-support)). If you try
 ## Development
 
 ```bash
-git clone https://github.com/googlarz/proton-drive-mcp.git
+git clone https://github.com/3lgr/proton-drive-mcp.git
 cd proton-drive-mcp
 npm install
 npm run build
@@ -601,7 +619,7 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Contributing
 
-Bug reports and pull requests welcome: [github.com/googlarz/proton-drive-mcp/issues](https://github.com/googlarz/proton-drive-mcp/issues)
+Bug reports and pull requests welcome: [github.com/3lgr/proton-drive-mcp/issues](https://github.com/3lgr/proton-drive-mcp/issues)
 
 ## License
 

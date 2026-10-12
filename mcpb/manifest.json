@@ -1,21 +1,21 @@
 {
   "manifest_version": "0.3",
-  "name": "proton-drive-mcp",
-  "display_name": "Proton Drive",
+  "name": "proton-drive-mcp-hardened",
+  "display_name": "Proton Drive (hardened fork)",
   "version": "0.0.0",
-  "description": "Give Claude access to your Proton Drive: list, upload, download, share and manage end-to-end encrypted files via the official proton-drive CLI.",
-  "long_description": "Upload, download, search, share, move, trash and manage your Proton Drive files and photos from Claude Desktop. This extension wraps the official proton-drive CLI, so files stay end-to-end encrypted and nothing goes through a third-party relay.\n\nRequires the official proton-drive CLI to be installed and signed in (run `proton-drive auth login` once). Enter the path to the CLI in the settings field below: run `which proton-drive` in a terminal (usually ~/.local/bin/proton-drive).",
+  "description": "Unofficial, hardened fork. Lets Claude work with your Proton Drive through the official proton-drive CLI, with human-approval gates, a local path allowlist and a sharing policy.",
+  "long_description": "Upload, download, search, share, move, trash and manage your Proton Drive files and photos from Claude Desktop. This is an unofficial, hardened fork (not affiliated with Proton AG). It wraps the official proton-drive CLI, so files stay end-to-end encrypted and nothing goes through a third-party relay.\n\nRequires the official proton-drive CLI to be installed and signed in (run `proton-drive auth login` once). Enter the path to the CLI in the settings field below: run `which proton-drive` in a terminal (usually ~/.local/bin/proton-drive).",
   "author": {
-    "name": "googlarz",
-    "url": "https://github.com/googlarz"
+    "name": "Elger Rodrigues (3lgr)",
+    "url": "https://github.com/3lgr"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/googlarz/proton-drive-mcp.git"
+    "url": "https://github.com/3lgr/proton-drive-mcp.git"
   },
-  "homepage": "https://github.com/googlarz/proton-drive-mcp",
-  "documentation": "https://github.com/googlarz/proton-drive-mcp#readme",
-  "support": "https://github.com/googlarz/proton-drive-mcp/issues",
+  "homepage": "https://github.com/3lgr/proton-drive-mcp",
+  "documentation": "https://github.com/3lgr/proton-drive-mcp#readme",
+  "support": "https://github.com/3lgr/proton-drive-mcp/issues",
   "license": "MIT",
   "keywords": [
     "proton",
@@ -35,7 +35,8 @@
       "env": {
         "PROTON_DRIVE_BIN": "${user_config.proton_drive_bin}",
         "PROTON_DRIVE_SYNC_PATH": "${user_config.sync_path}",
-        "PROTON_DRIVE_INDEX": "${user_config.persistent_index}"
+        "PROTON_DRIVE_INDEX": "${user_config.persistent_index}",
+        "PROTON_DRIVE_BIN_SHA256": "${user_config.proton_drive_bin_sha256}"
       }
     }
   },
@@ -57,6 +58,12 @@
       "title": "Persistent search index (plaintext on disk)",
       "description": "Optional, off by default. Saves file names, paths and hashes from folder scans to a local file (owner-only permissions) so searches are fast after a restart. Your Drive is end-to-end encrypted, but this local copy is NOT encrypted. Clear it with `proton-drive-cli index clear`.",
       "default": false,
+      "required": false
+    },
+    "proton_drive_bin_sha256": {
+      "type": "string",
+      "title": "proton-drive CLI sha256 (optional)",
+      "description": "Optional. sha256 of the proton-drive binary (shasum -a 256 <path>). When set, only a verified private copy of that binary is ever executed.",
       "required": false
     }
   },
