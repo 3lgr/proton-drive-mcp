@@ -1,5 +1,78 @@
 # Changelog
 
+## 2.0.0 (hardened fork) - 2026-10-12
+
+First release of the `@3lgr/proton-drive-mcp` fork of googlarz/proton-drive-mcp 1.5.2. The 47 tools and their names
+are unchanged. **This is a major version because several security behaviours changed; read "Breaking changes".**
+
+### Breaking changes
+- **Irreversible or outward-facing tools fail closed** when the MCP client cannot ask the human (no elicitation):
+  `drive_empty_trash`, `drive_delete`, `drive_share_invite|revoke|set_url|remove_url|remove_all|leave`,
+  `drive_auth_logout`, `photos_delete_album`, `drive_invitation_accept|reject`, and the `remove` strategy of
+  `drive_download` / `photos_download`. Set `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE=1` to restore prompt-level
+  `confirmed: true` for them. With an elicitation-capable client the human is now **always** asked, even when the model
+  sends `confirmed: true`.
+- `drive_invitation_accept` is now gated.
+- **Sharing policy** (default `strict`, `PROTON_DRIVE_SHARE_POLICY=off` to opt out): public links via the tools must be
+  `viewer`, have a password (8+ characters) and expire within 90 days; the `admin` invitation role is refused;
+  `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS` limits invitation domains. E-mail addresses are canonicalised (lower case,
+  punycode); lists, quoted local parts and look-alike characters are rejected.
+- **Results that carry text written by others are wrapped** as `{untrusted, source, notice, [sanitized, changes,
+  truncated, confusable], content}` and sanitised (hidden/control characters become visible `⟦removed:…⟧` markers;
+  NFKC folding; length caps). Clients that read `items` at the top level must read `content.items`.
+- **Downloads**: names are validated and the transfer goes through a private staging directory and a plan. Remote items
+  whose name starts with `.` are refused; symlinks, hardlinks and special files are refused; existing local items are
+  never overwritten except by an explicit `remove` of a same-type file (an empty folder may replace an empty folder; a
+  non-empty folder is never deleted). `PROTON_DRIVE_DOWNLOAD_MAX_BYTES` (default 50 GiB).
+- **Uploads** run from a frozen, hashed snapshot of the validated tree; folders containing secret-looking files or any
+  symlink/hardlink/special file are refused (`PROTON_DRIVE_UPLOAD_MAX_BYTES`, default 5 GiB; needs temp space).
+- The credential denylist now also applies **inside** `PROTON_DRIVE_LOCAL_ROOT`; `*.key`, `*.kdbx`, `credentials.json`,
+  browser profiles, `.git-credentials` and others are denied by default.
+- **Drive roots** (`/`, `/my-files`, `/trash`, ...) are never the subject of a mutation; destinations other than
+  `/my-files` among the roots are refused; `drive_delete` accepts only `/trash/<name>` or `/photos-trash/<name>`.
+- **`drive_read_content` no longer reads `.docx`/`.pdf` by default.** Set `PROTON_DRIVE_ENABLE_DOC_EXTRACT=1` (accepted
+  risk). Plain text is unaffected.
+- **Errors**: text printed by the CLI is classified and withheld (error code with fixed text plus a length/hash
+  marker). Error messages no longer contain CLI output, paths or links.
+- The CLI runs with a **minimal environment** (`PROTON_DRIVE_PASS_ENV` to pass more).
+- The npm package is `@3lgr/proton-drive-mcp` and is not published to npm; install from the repository tag.
+  `publishConfig` was removed and manual `npm publish` is blocked.
+
+### Security fixes (backlog IDs from the review of 1.5.2)
+- F-01 consent gates unified in one table and enforced by elicitation or fail-closed policy.
+- F-02 download validation, staging and plan; F-03 case-insensitive protected locations on macOS/Windows with
+  `realpath.native`; F-04/F-05 wider denylist, name denylist under `LOCAL_ROOT`, recursive upload scan then snapshot;
+  F-06 sharing policy; F-07 untrusted-content envelope; F-08 roots and trash-path validation;
+  F-09 link password still travels in argv (CLI limitation) but is never logged or returned; F-10 minimal child
+  environment; F-11 sandboxed parser process, byte/entry/ratio ceilings enforced on produced bytes; F-12/F-13 allowlist
+  logs and errors; F-14 list caps (200); F-15 random exclusive temp file for the Claude Desktop config;
+  F-16 no floating `npx -y` in docs or Smithery config.
+- S-01 optional binary pin with a verified private copy; S-02 `@modelcontextprotocol/sdk` ^1.32.1 and `proxy-addr`
+  override (`npm audit` clean); S-03 release workflows (SHA256SUMS, attestation, no overwrite, tests first);
+  S-04 Docker base pinned by digest; S-05 pinned npm for publishing; S-06 verify/publish job split;
+  S-07 `persist-credentials: false`.
+
+### Added
+- `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE`, `PROTON_DRIVE_SHARE_POLICY`, `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS`,
+  `PROTON_DRIVE_BIN_SHA256`, `PROTON_DRIVE_PASS_ENV`, `PROTON_DRIVE_UPLOAD_MAX_BYTES`,
+  `PROTON_DRIVE_DOWNLOAD_MAX_BYTES`, `PROTON_DRIVE_ENABLE_DOC_EXTRACT`.
+- `doctor`: binary pin, PATH resolution and writable-location checks.
+- `npm run test:coverage`; SECURITY.md, CONTRIBUTING.md, issue templates; docker in Dependabot.
+- Word text hidden by `w:vanish`, white or tiny text, hidden styles, tracked deletions or `mc:AlternateContent` is
+  dropped and reported (`hidden_text_dropped`).
+
+### Changed
+- `src/index.ts` and `src/services/drive.ts` split into cohesive modules (no behaviour change).
+- README, SPEC and glama/smithery/mcpb metadata describe the fork; the documentation no longer claims `execFile`
+  (the code uses `spawn` with argument arrays) and the "safe changes" wording now says what the gates guarantee.
+
+### Known limitations
+- Behaviour of the closed CLI is not verifiable: whether it sanitises remote names, follows symlinks on upload, or
+  treats paths at roots. The server validates before and after, and refuses when it cannot.
+- Moving or copying an item into a folder that is already shared exposes it to that folder's members; the sharing
+  policy does not (yet) look at the destination's members.
+- Windows is untested and unsupported. Share-leave and invitation accept/reject were never exercised on a real account.
+
 ## 1.5.2 — 2026-10-05
 
 ### Added

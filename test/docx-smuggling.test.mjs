@@ -33,7 +33,8 @@ function rawZip(entries) {
   return Buffer.concat([...parts, dir, end]);
 }
 
-const wrap = (body) => `<?xml version="1.0"?><w:document><w:body>${body}</w:body></w:document>`;
+const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const wrap = (body) => `<?xml version="1.0"?><w:document xmlns:w="${WML}"><w:body>${body}</w:body></w:document>`;
 const fileNode = { type: "file", name: { ok: true, value: "a.docx" }, activeRevision: { claimedSize: 1 } };
 function read(zip) {
   const drive = {
@@ -195,3 +196,38 @@ describe("document extraction is opt-in", () => {
     }
   });
 });
+
+describe("XML-level differentials (what a real parser sees vs what a pattern sees)", () => {
+  const one = (para, extra = []) => read(rawZip([{ name: "word/document.xml", data: wrap(para) }, ...extra]));
+  it("single-quoted and spaced attributes do not hide a vanish run from the filter", async () => {
+    for (const run of [
+      "<w:r><w:rPr><w:vanish w:val='1'/></w:rPr><w:t>HID</w:t></w:r>",
+      "<w:r><w:rPr><w:vanish w:val = \"true\" /></w:rPr><w:t>HID</w:t></w:r>",
+      "<w:r><w:rPr><w:color w:val = 'FFFFFF'/></w:rPr><w:t>HID</w:t></w:r>",
+      "<w:r><w:rPr><w:sz w:val='2'/></w:rPr><w:t>HID</w:t></w:r>",
+    ]) {
+      const r = await one(`<w:p>${run}<w:r><w:t>shown</w:t></w:r></w:p>`);
+      assert.ok(!r.text.includes("HID"), run);
+      assert.ok(r.hiddenTextDropped >= 1, run);
+    }
+  });
+  it("text inside XML comments and CDATA is not document text", async () => {
+    const r = await one('<w:p><w:r><w:t>real</w:t></w:r><!-- <w:r><w:t>COMMENTED</w:t></w:r> --></w:p><w:p><![CDATA[<w:r><w:t>CDATA-TEXT</w:t></w:r>]]></w:p>');
+    assert.ok(r.text.includes("real"));
+    assert.ok(!r.text.includes("COMMENTED") && !r.text.includes("CDATA-TEXT"));
+    assert.ok(r.hiddenTextDropped >= 1);
+  });
+  it("a document that rebinds the w: prefix to another namespace is refused", async () => {
+    const evil = `<?xml version="1.0"?><w:document xmlns:w="urn:not-word"><w:body><w:p><w:r><w:t>X</w:t></w:r></w:p></w:body></w:document>`;
+    await assert.rejects(read(rawZip([{ name: "word/document.xml", data: evil }])), /rebinds the w: namespace/);
+    const late = `<?xml version="1.0"?><w:document xmlns:w="${WML}"><w:body><w:p xmlns:w="urn:evil"><w:r><w:t>X</w:t></w:r></w:p></w:body></w:document>`;
+    await assert.rejects(read(rawZip([{ name: "word/document.xml", data: late }])), /rebinds the w: namespace/);
+  });
+  it("a document without the WordprocessingML namespace is refused", async () => {
+    await assert.rejects(read(rawZip([{ name: "word/document.xml", data: "<w:document><w:body><w:p><w:r><w:t>X</w:t></w:r></w:p></w:body></w:document>" }])), /does not declare the WordprocessingML namespace/);
+  });
+  it("styles.xml with DOCTYPE is refused too", async () => {
+    await assert.rejects(one("<w:p/>", [{ name: "word/styles.xml", data: '<!DOCTYPE s [<!ENTITY a "b">]><w:styles/>' }]), /styles\.xml declares a DOCTYPE/);
+  });
+});
+
