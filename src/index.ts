@@ -37,6 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
+import { assertMutablePath } from "./policy/remoteRoots.js";
 import { precheckDownload, guardDownload, verifyDownloaded, guardPhotoDownload, verifyPhotoDownload } from "./services/downloadGuard.js";
 import {
   UPLOAD_FILE_STRATEGIES, UPLOAD_FOLDER_STRATEGIES, DOWNLOAD_FILE_STRATEGIES, DOWNLOAD_FOLDER_STRATEGIES,
@@ -1606,6 +1607,7 @@ export async function main() {
           if (!syncRoot) return fail("PROTON_DRIVE_SYNC_PATH is not set. Set it to the root of your Proton Drive sync folder.");
           if (typeof a.content !== "string") return fail("content must be a string");
           const writePath = validateRemotePath(a.path);
+          assertMutablePath(writePath, "write");
           if (await syncFileExists(syncRoot, writePath)) {
             await gate("drive_write_file", a, `drive_write_file needs your approval. It ${GATES.drive_write_file!.consequence}\nTarget: ${showValue(writePath)}`);
           }
