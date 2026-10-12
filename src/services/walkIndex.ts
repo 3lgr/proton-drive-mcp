@@ -97,7 +97,7 @@ export function writeIndex(file: IndexFile, o: { maxBytes?: number } = {}): "ok"
       if (!existing.isDirectory() || foreignOrLoose(existing)) {
         if (!warnedDirs.has(dir)) {
           warnedDirs.add(dir);
-          logger.warn(`Persistent walk index not saved: ${dir} must be a real directory owned by you with no group/other access (mode 0700). Use a dedicated directory.`);
+          logger.warn("Persistent walk index not saved: the index directory must be a real directory owned by you with no group/other access (mode 0700). Use a dedicated directory.");
         }
         return "refused";
       }
@@ -121,7 +121,7 @@ export function writeIndex(file: IndexFile, o: { maxBytes?: number } = {}): "ok"
     if (!fin.isFile() || (fin.mode & 0o077) !== 0) { try { unlinkSync(target); } catch { /* best effort */ } return "refused"; }
     return "ok";
   } catch (err) {
-    logger.warn("Persistent walk index write failed:", err instanceof Error ? err.message : String(err));
+    logger.warn("Persistent walk index write failed:", err);
     return "error";
   } finally {
     if (tmp) { try { unlinkSync(tmp); } catch { /* already gone */ } }

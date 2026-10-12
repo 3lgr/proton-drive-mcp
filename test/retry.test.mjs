@@ -39,7 +39,7 @@ describe("transient retry (real server, fake CLI)", () => {
       const { client, sb } = await server(kind, 9);
       const res = await client.call("drive_list", { path: "/my-files" });
       assert.equal(res.isError, true);
-      assert.match(res.text, /Too many|timed out|ECONNRESET/);
+      assert.match(res.text, /\[(RATE_LIMITED|NETWORK)\]/);
       assert.equal(nonVersionCalls(sb.argvLog).length, 3);
     });
   }

@@ -97,6 +97,11 @@ switch (mode) {
     process.stderr.write(`usage error while running: ${argv.join(" ")}\n`);
     process.exit(2);
     break;
+  case "fail-custom": // FAKE_FAIL_STDERR / FAKE_FAIL_STDOUT: arbitrary hostile text, exit 1
+    if (process.env.FAKE_FAIL_STDERR) process.stderr.write(process.env.FAKE_FAIL_STDERR + "\n");
+    if (process.env.FAKE_FAIL_STDOUT) process.stdout.write(process.env.FAKE_FAIL_STDOUT + "\n");
+    process.exit(1);
+    break;
   case "fail-stdout-crash":
     process.stderr.write("=====\n");
     process.stdout.write("ENOENT: no such file or directory, open '/nowhere/file.bin'");

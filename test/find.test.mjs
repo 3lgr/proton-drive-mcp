@@ -48,7 +48,8 @@ describe("drive_search", () => {
     assert.equal(d.walk.complete, false);
     assert.equal(d.walk.skippedCount, 1);
     assert.equal(d.walk.skipped[0].path, "/my-files/Broken");
-    assert.match(d.walk.skipped[0].reason, /permanent failure/);
+    assert.match(d.walk.skipped[0].reason, /\[CLI_FAILED\]/);
+    assert.doesNotMatch(d.walk.skipped[0].reason, /permanent failure/, "CLI text is classified, not repeated");
     assert.equal(d.walk.fromCache, false);
   });
 

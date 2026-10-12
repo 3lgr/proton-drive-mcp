@@ -37,6 +37,7 @@ import { sweepStaleTempDirs } from "./utils/tempSweep.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { GATES, descriptionSuffix, needsConfirmedProp, refusalMessage, type Args } from "./policy/gates.js";
 import { createApprover } from "./policy/approval.js";
+import { strMarker } from "./utils/safeOutput.js";
 import { UNTRUSTED_TOOLS, wrapUntrusted, sanitizeMessage, sanitizeDeep, sanitizeString, newStats, approvalField } from "./policy/untrusted.js";
 import { loadSharePolicy, checkInvite, checkPublicLink } from "./policy/sharePolicy.js";
 import { assertMutablePath } from "./policy/remoteRoots.js";
@@ -1148,7 +1149,7 @@ export const CORE_TOOL_NAMES = new Set([
 export function resolveTier(raw: string | undefined): "full" | "core" {
   const v = (raw ?? "full").trim().toLowerCase();
   if (v === "full" || v === "core") return v;
-  logger.warn(`Unknown PROTON_DRIVE_TOOL_TIER "${raw}" — using "full" (valid: full, core).`);
+  logger.warn('Unknown PROTON_DRIVE_TOOL_TIER; using "full" (valid: full, core). Value:', raw);
   return "full";
 }
 
@@ -1648,7 +1649,7 @@ export async function main() {
         }
 
         default:
-          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${sanitizeString(String(name), { cap: 100 })}`);
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool ${strMarker(String(name))}`);
       }
     } catch (err) {
       if (err instanceof McpError) throw err;
@@ -1689,7 +1690,7 @@ export async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info(`proton-drive-mcp v${VERSION} running`);
+  logger.info("proton-drive-mcp running, version", VERSION);
   void sweepStaleTempDirs(); // after connect so it can never delay initialize; best-effort, never throws
 
   // Probe the CLI after connecting so a slow `version` can never delay
@@ -1697,12 +1698,12 @@ export async function main() {
   // up: tools/list works and each call returns a clear error.
   void checkCliAvailable().then((cliCheck) => {
     if (!cliCheck.available) {
-      logger.error(cliCheck.reason === "integrity" ? `proton-drive CLI refused: ${cliCheck.detail ?? "integrity check failed"}` : cliCheck.reason === "not_executable"
+      logger.error(cliCheck.reason === "integrity" ? "proton-drive CLI refused by the integrity check (run `proton-drive-cli doctor` for the reason)" : cliCheck.reason === "not_executable"
         ? "proton-drive CLI found but not executable. Run: chmod +x $(which proton-drive)"
         : "proton-drive CLI not found. Download from https://proton.me/download/drive/cli/index.html, or set PROTON_DRIVE_BIN to its absolute path (find it with `which proton-drive`).");
     } else {
       // One stderr line (the logger never writes stdout); best effort, never fatal.
-      runDriveRaw(["version"]).then((t) => { const w = cliCompatWarning(t); if (w) logger.warn(w); }, () => {});
+      runDriveRaw(["version"]).then((t) => { const w = cliCompatWarning(t); if (w) logger.warn(w); }, () => {}); // w is built from digits and constants only (cliVersion.ts)
     }
   });
 }
