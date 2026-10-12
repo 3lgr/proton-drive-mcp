@@ -89,7 +89,12 @@ export const TOOL_POLICY: Readonly<Record<string, ToolPolicy>> = {
       if (!path && !uid) throw new Error("Provide path or uid (from drive_list_trash).");
       return { ...a, ...(path ? { path } : {}), ...(uid ? { uid } : {}) };
     },
-    prompt: (v) => `drive_delete needs your approval. It ${GATES.drive_delete!.consequence}\nTarget: ${approvalField(v.path ?? `uid ${String(v.uid)}`)}`,
+    // N-03: a uid is resolved to its name BEFORE the human is asked (not found, duplicate or invalid name: refused here)
+    prompt: async (v, ctx) => {
+      const resolved = v.path === undefined ? await ctx.drive.resolveTrashTarget(undefined, String(v.uid)) : undefined;
+      const target = v.path !== undefined ? approvalField(v.path) : `${approvalField(resolved)} (uid ${approvalField(v.uid)})`;
+      return `drive_delete needs your approval. It ${GATES.drive_delete!.consequence}\nTarget: ${target}`;
+    },
   },
   drive_empty_trash: { class: "destructive", consent: "dispatcher", validate: (a) => ({ ...a }) },
   drive_auth_logout: { class: "destructive", consent: "dispatcher", validate: (a) => ({ ...a }) },

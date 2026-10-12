@@ -135,3 +135,66 @@ describe("companion CLI --uid", () => {
     assert.deepEqual(r.calls, []);
   });
 });
+
+// N-03: the human approves a NAME, not an opaque uid; and the name the uid resolves to is validated again.
+describe("N-03 drive_delete by uid", () => {
+  const RLO = String.fromCodePoint(0x202e);
+  const items = [
+    { uid: "vol~solo", name: { ok: true, value: "solo.txt" }, type: "file" },
+    { uid: "vol~dots", name: { ok: true, value: ".." }, type: "file" },
+    { uid: "vol~dot", name: { ok: true, value: "." }, type: "file" },
+    { uid: "vol~bidi", name: { ok: true, value: `fa${RLO}txt.exe` }, type: "file" },
+  ];
+  const runner = () => { const calls = []; return { calls, fn: async (args) => { calls.push([...args]); return args[1] === "list" ? items : []; } }; };
+
+  for (const uid of ["vol~dots", "vol~dot"]) {
+    it(`a uid that resolves to the name of a directory entry (${uid}) is refused before any spawn`, async () => {
+      for (const op of ["delete", "restore"]) {
+        const t = runner();
+        await assert.rejects(new DriveService(t.fn)[op](undefined, uid), /not a valid trash item|\. or \.\./);
+        assert.deepEqual(mutations(t.calls), []);
+      }
+    });
+  }
+  it("the path form /trash/.. is refused too", async () => {
+    const t = runner();
+    await assert.rejects(new DriveService(t.fn).delete("/trash/.."), /not a valid trash item|\. or \.\./);
+    assert.deepEqual(mutations(t.calls), []);
+  });
+
+  async function withElicit(handler, fn) {
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
+    const { ElicitRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
+    const { DIST_INDEX } = await import("./helpers/mcp-client.mjs");
+    const sb = makeSandbox();
+    const client = new Client({ name: "t", version: "0" }, { capabilities: { elicitation: { form: {} } } });
+    client.setRequestHandler(ElicitRequestSchema, handler);
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [DIST_INDEX], env: fakeEnv("json", sb, { FAKE_STDOUT: JSON.stringify(items) }) }));
+    try { await fn(client, sb); } finally { await client.close(); sb.cleanup(); }
+  }
+
+  it("the approval prompt shows the resolved, escaped name next to the uid", async () => {
+    let msg = "";
+    await withElicit(async (req) => { msg = req.params.message; return { action: "decline" }; }, async (client, sb) => {
+      const r = await client.callTool({ name: "drive_delete", arguments: { uid: "vol~bidi", confirmed: true } });
+      assert.equal(r.isError, true);
+      assert.deepEqual(mutations(nonVersionCalls(sb.argvLog)), []);
+    });
+    assert.match(msg, /Target: .*fa.*txt\.exe/);
+    assert.match(msg, /vol~bidi/);
+    assert.ok(!msg.includes(RLO), "the bidi override must be escaped, not rendered");
+  });
+
+  it("an unknown or unresolvable uid is refused before the human is asked", async () => {
+    let asked = 0;
+    await withElicit(async () => { asked++; return { action: "accept", content: { approve: true } }; }, async (client, sb) => {
+      for (const uid of ["vol~gone", "vol~dots"]) {
+        const r = await client.callTool({ name: "drive_delete", arguments: { uid, confirmed: true } });
+        assert.equal(r.isError, true, uid);
+      }
+      assert.deepEqual(mutations(nonVersionCalls(sb.argvLog)), []);
+    });
+    assert.equal(asked, 0);
+  });
+});
