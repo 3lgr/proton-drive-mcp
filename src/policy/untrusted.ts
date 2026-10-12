@@ -197,7 +197,15 @@ export const NOTICE = "Data from Proton Drive (names, paths, e-mail addresses, f
 
 export interface Envelope {
   untrusted: true; source: string; notice: string;
-  sanitized?: true; changes?: number; truncated?: true; confusable?: number; content: unknown;
+  sanitized?: true; changes?: number; truncated?: true; confusable?: number;
+  /** The extractor dropped hidden document text (w:vanish); the count is in hidden_text_dropped_runs. */
+  hidden_text_dropped?: true; hidden_text_dropped_runs?: number;
+  content: unknown;
+}
+
+function hiddenFlags(data: unknown): Pick<Envelope, "hidden_text_dropped" | "hidden_text_dropped_runs"> {
+  const n = data && typeof data === "object" ? (data as Record<string, unknown>)["hiddenTextDropped"] : undefined;
+  return typeof n === "number" && n > 0 ? { hidden_text_dropped: true, hidden_text_dropped_runs: n } : {};
 }
 
 /** Wraps a tool's result. Free-text fields additionally get BEGIN/END markers carrying a per-response nonce. */
@@ -223,6 +231,7 @@ export function wrapUntrusted(tool: string, data: unknown): Envelope {
     ...(stats.changed ? { sanitized: true as const, changes: stats.changed } : {}),
     ...(stats.truncated ? { truncated: true as const } : {}),
     ...(stats.confusable ? { confusable: stats.confusable } : {}),
+    ...hiddenFlags(data),
     content,
   };
 }

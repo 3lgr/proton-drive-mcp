@@ -32,7 +32,7 @@ const SUPPORTED = "plain text, markdown, json, csv/tsv, yaml, xml, html, log and
 export interface ReadContentArgs { path: string; maxChars?: number; offset?: number }
 export interface ReadContentResult {
   path: string; format: string; size: number; chars: number; offset: number; text: string;
-  truncated: boolean; nextOffset?: number; note?: string;
+  truncated: boolean; nextOffset?: number; note?: string; hiddenTextDropped?: number;
 }
 export interface ReadContentDeps {
   /** Overrides for the PDF/DOCX parser process (tests): limits, text cap, package specifiers, a hook receiving the Worker. */
@@ -78,7 +78,7 @@ export function readTimeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.floor(n), 1), MAX_READ_TIMEOUT_MS) : DEFAULT_READ_TIMEOUT_MS;
 }
 
-interface Extracted { text: string; note?: string; capped: boolean }
+interface Extracted { text: string; note?: string; capped: boolean; hiddenTextDropped?: number }
 
 const MAX_CHILD_STDOUT = 24 * 1024 * 1024;
 
@@ -244,10 +244,13 @@ export async function readDriveContent(drive: DriveService, args: ReadContentArg
   const buf = await retryOnLocked(() => downloadBytes(drive, path, cap));
   let text: string;
   let note: string | undefined;
+  let hiddenTextDropped: number | undefined;
   let capped = false;
   if (format === "text") text = decodeUtf8(buf);
   else {
-    ({ text, note, capped } = await extractInChild(format, buf, deps.worker ?? {}));
+    const ex = await extractInChild(format, buf, deps.worker ?? {});
+    ({ text, note, capped } = ex);
+    hiddenTextDropped = ex.hiddenTextDropped;
     if (capped) note = [note, `text capped at ${deps.worker?.maxTextChars ?? MAX_EXTRACT_CHARS} characters; the rest of the file was not read`].filter(Boolean).join("; ");
   }
   text = text.replaceAll("\0", "");
@@ -258,5 +261,6 @@ export async function readDriveContent(drive: DriveService, args: ReadContentArg
     path, format, size: buf.length, chars: s.total, offset, text: s.text, truncated,
     ...(truncated ? { nextOffset: s.end } : {}),
     ...(note ? { note } : {}),
+    ...(hiddenTextDropped ? { hiddenTextDropped } : {}),
   };
 }
