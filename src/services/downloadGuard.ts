@@ -15,12 +15,13 @@ import {
 import { join } from "node:path";
 import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
-import { assertLocalPathAllowed, allowedRootFor } from "../utils/localguard.js";
+import { assertLocalPathAllowed } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
 import { strMarker } from "../utils/safeOutput.js";
 import { approvalField } from "../policy/untrusted.js";
-import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
-import { createOwnedTemp, removeTreeSafe, serverTempBase, ROOT_PRIVATE_NAME, type OwnedTemp } from "../utils/privateTemp.js";
+import { unregisterTempDir, removeTreeSafe } from "../utils/tempDirs.js";
+import { createOwnedTemp, watchTreeBudget } from "../utils/privateTemp.js";
+import { callContext } from "../utils/subprocess.js";
 import type { DownloadResult, TransferSummary } from "../types/index.js";
 import type { DownloadFileStrategy, DownloadFolderStrategy, PhotoDownloadStrategy } from "../policy/strategies.js";
 import { assertSafeEntryName, planDownload, type Action, type Existing, type Policy, type StagedNode } from "./downloadPlan.js";
@@ -132,22 +133,13 @@ function ensurePrivateDir(dir: string): void {
 }
 
 /**
- * A fresh private scratch directory (marked, 0700): inside the allowed root's .pdmcp-private folder when the
- * destination is under an allowed root (same filesystem => atomic rename), else in the server's private temp base.
- * Never beside a user-chosen destination (for a destination that IS the root, that would be its parent).
+ * A fresh private scratch directory (random name, 0700) inside this process's own temp directory. Never beside a
+ * user-chosen destination (for a destination that IS the allowed root, that would be its parent). A different
+ * filesystem from the destination only costs a copy instead of a rename (placeFile/placeDir handle EXDEV).
  */
-function makeStaging(realDest: string): string {
-  const root = allowedRootFor(realDest);
-  const base = root ? join(root, ROOT_PRIVATE_NAME) : serverTempBase();
-  let owned: OwnedTemp;
-  try { owned = createOwnedTemp(base, "pdmcp-stage-"); }
-  catch { owned = createOwnedTemp(serverTempBase(), "pdmcp-stage-"); }
-  stageRoots.set(owned.work, owned.root);
-  registerTempDir(owned.root);
-  return owned.work;
+function makeStaging(): { work: string; root: string } {
+  return createOwnedTemp("pdmcp-stage-");
 }
-
-const stageRoots = new Map<string, string>();
 
 // ---- 4. scan the staged tree (lstat only, links are never followed) ----
 
@@ -247,16 +239,42 @@ function execute(stage: string, dest: string, actions: readonly Action[]): { ski
   return { skipped };
 }
 
+/**
+ * Runs the transfer while counting what lands in the stage. The ceiling is enforced DURING the write: the moment
+ * more than PROTON_DRIVE_DOWNLOAD_MAX_BYTES (or MAX_ENTRIES entries) are on disk the CLI is aborted, not after.
+ */
+async function transferWithinBudget<T>(stage: string, transfer: (stageDir: string) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const outer = callContext.getStore()?.signal;
+  const relay = (): void => controller.abort();
+  outer?.addEventListener("abort", relay, { once: true });
+  let exceeded: string | undefined;
+  const stop = watchTreeBudget(stage, { maxBytes: downloadMaxBytes(), maxEntries: MAX_ENTRIES }, (what) => {
+    exceeded = what === "bytes" ? `more than PROTON_DRIVE_DOWNLOAD_MAX_BYTES (${downloadMaxBytes()}) arrived` : `more than ${MAX_ENTRIES} entries arrived`;
+    controller.abort();
+  });
+  try {
+    return await callContext.run({ signal: controller.signal }, () => transfer(stage));
+  } catch (e) {
+    if (exceeded) throw new Error(`download refused and stopped: ${exceeded}`);
+    throw e;
+  } finally {
+    stop();
+    outer?.removeEventListener("abort", relay);
+  }
+}
+
 async function staged<T>(
   localPath: string, expectTop: string | null, policy: Policy, transfer: (stageDir: string) => Promise<T>, transient = false,
   onStaging?: (stageDir: string) => void,
 ): Promise<{ result: T; skipped: number }> {
   ensurePrivateDir(localPath);
   const realDest = realpathSync.native(localPath);
-  const stage = makeStaging(realDest);
+  const owned = makeStaging();
+  const stage = owned.work;
   onStaging?.(stage);
   try {
-    const result = await transfer(stage);
+    const result = await transferWithinBudget(stage, transfer);
     const realStage = realpathSync.native(stage);
     const top = scanStaged(realStage);
     if (expectTop !== null && top.some((n) => n.name !== expectTop)) {
@@ -270,9 +288,7 @@ async function staged<T>(
     }
     return { result, ...execute(realStage, realDest, actions) };
   } finally {
-    const owner = stageRoots.get(stage) ?? stage;
-    stageRoots.delete(stage);
-    try { removeTreeSafe(owner); } catch { /* best effort; the startup sweep takes it if it is ours and orphaned */ } finally { unregisterTempDir(owner); }
+    try { removeTreeSafe(owned.root); } catch { /* best effort; shutdown removes the whole process directory */ } finally { unregisterTempDir(owned.root); }
   }
 }
 

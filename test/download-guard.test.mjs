@@ -5,6 +5,7 @@ import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, exis
 import { tmpdir, homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { makeSandbox, startServer, nonVersionCalls } from "./helpers/mcp-client.mjs";
+import { scratchDirs } from "./helpers/scratch.mjs";
 import { assertSafeEntryName, scanStaged } from "../dist/services/downloadGuard.js";
 import { planDownload } from "../dist/services/downloadPlan.js";
 
@@ -93,7 +94,8 @@ describe("drive_download / photos_download validate remote entries", () => {
     }, "drive_download", { remotePath: "/my-files/proj", localPath: dest }, { FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "proj/a.txt" }, { rel: "proj/.gitignore" }, { rel: "proj/sub/b.txt" }]) });
     assert.equal(r.isError, false, r.text);
     const argv = downloads(calls)[0];
-    assert.notEqual(realpathSync(dirname(dirname(argv[3]))), realpathSync(dirname(dest)), "staging is not beside the destination");
+    assert.notEqual(dirname(dirname(argv[3])), dirname(dest), "staging is not beside the destination");
+    assert.notEqual(dirname(argv[3]), dirname(dest));
     assert.match(basename(dirname(argv[3])), /^pdmcp-stage-/);
     assert.notEqual(argv[3], dest);
     assert.equal(statSync(dest).mode & 0o777, 0o700);
@@ -107,7 +109,6 @@ describe("drive_download / photos_download validate remote entries", () => {
     assert.ok(!calls.some((a) => a[1] === "list"));
   });
 
-  const stageResidue = (dir) => { try { return readdirSync(dir).filter((n) => /pdmcp-stage-/.test(n)); } catch { return []; } };
   const folderTree = (extra = {}) => ({
     __info__: { "/my-files/proj": folderNode },
     "/my-files/proj": [item("a.txt")],
@@ -116,13 +117,13 @@ describe("drive_download / photos_download validate remote entries", () => {
   async function stagedRefusal(label, writes, match, env = {}) {
     const root = mkdtempSync(join(base, "case-"));
     const dest = join(root, "dest");
-    const tmp = mkdtempSync(join(base, "tmp-")); // the server's private TMPDIR: its scratch base is <tmp>/pdmcp-private-<uid>
+    const tmp = mkdtempSync(join(base, "tmp-")); // the server's private TMPDIR: its scratch lives in <tmp>/pdmcp-XXXXXX
     const { r } = await run(folderTree(), "drive_download", { remotePath: "/my-files/proj", localPath: dest },
       { FAKE_DOWNLOAD_WRITE: JSON.stringify(writes), TMPDIR: tmp, ...env });
     assert.equal(r.isError, true, `${label}: ${r.text}`);
     assert.match(r.text, match, label);
     assert.deepEqual(existsSync(dest) ? readdirSync(dest) : [], [], `${label}: nothing may reach the destination`);
-    assert.deepEqual(stageResidue(join(tmp, `pdmcp-private-${process.getuid()}`)), [], `${label}: staging removed`);
+    assert.deepEqual(scratchDirs(tmp, "pdmcp-stage-"), [], `${label}: staging removed`);
   }
 
   it("a symlink created by the CLI refuses the whole download; nothing reaches the destination", () =>
@@ -154,17 +155,19 @@ describe("drive_download / photos_download validate remote entries", () => {
 
   it("the destination swapped for a symlink to a protected place during the transfer is refused", async () => {
     const root = mkdtempSync(join(base, "swap-"));
+    const tmp = mkdtempSync(join(base, "tmp-"));
     const dest = join(root, "dest");
     mkdirSync(dest);
     const { r } = await run(folderTree(), "drive_download", { remotePath: "/my-files/proj", localPath: dest },
-      { FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "proj/a.txt" }]), FAKE_DOWNLOAD_SWAP: JSON.stringify({ path: dest, to: "/etc" }) });
+      { FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "proj/a.txt" }]), FAKE_DOWNLOAD_SWAP: JSON.stringify({ path: dest, to: "/etc" }), TMPDIR: tmp });
     assert.equal(r.isError, true, r.text);
     assert.equal(existsSync("/etc/proj"), false);
-    assert.deepEqual(stageResidue(root), []);
+    assert.deepEqual(scratchDirs(tmp, "pdmcp-stage-"), []);
   });
 
   it("an error in the middle of placing (merge into a folder holding a symlink) rolls back what was placed", async () => {
     const root = mkdtempSync(join(base, "mid-"));
+    const tmp = mkdtempSync(join(base, "tmp-"));
     const dest = join(root, "dest");
     const outside = join(root, "outside"); mkdirSync(outside);
     mkdirSync(join(dest, "proj"), { recursive: true });
@@ -174,12 +177,12 @@ describe("drive_download / photos_download validate remote entries", () => {
       "/my-files/proj": [item("a.txt"), item("sub", "folder")],
       "/my-files/proj/sub": [item("b.txt")],
     }, "drive_download", { remotePath: "/my-files/proj", localPath: dest, folderConflictStrategy: "merge" },
-      { FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "proj/a.txt" }, { rel: "proj/sub/b.txt" }]) });
+      { FAKE_DOWNLOAD_WRITE: JSON.stringify([{ rel: "proj/a.txt" }, { rel: "proj/sub/b.txt" }]), TMPDIR: tmp });
     assert.equal(r.isError, true, r.text);
     assert.match(r.text, /symlink/);
     assert.equal(existsSync(join(dest, "proj", "a.txt")), false, "a.txt placed before the failure is rolled back");
     assert.deepEqual(readdirSync(outside), [], "nothing written through the symlink");
-    assert.deepEqual(stageResidue(root), []);
+    assert.deepEqual(scratchDirs(tmp, "pdmcp-stage-"), []);
   });
 
   it("conflict strategies are applied by the server: skip keeps, rename adds a unique name, remove replaces", async () => {

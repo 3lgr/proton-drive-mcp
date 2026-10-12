@@ -10,8 +10,8 @@ import { pipeline } from "node:stream/promises";
 import { basename, join } from "node:path";
 import { isProtectedEntry } from "../utils/localguard.js";
 import { showValue } from "../utils/text.js";
-import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
-import { createOwnedTemp, removeTreeSafe, serverTempBase } from "../utils/privateTemp.js";
+import { unregisterTempDir, removeTreeSafe } from "../utils/tempDirs.js";
+import { createOwnedTemp } from "../utils/privateTemp.js";
 
 export const MAX_UPLOAD_ENTRIES = 50_000;
 const MAX_DEPTH = 64;
@@ -220,9 +220,8 @@ const sameAction = (a: SnapshotAction, b: SnapshotAction): boolean =>
 export async function withUploadSnapshot<T>(
   localPaths: readonly string[], fn: (snapshotPaths: string[]) => Promise<T>, opts: SnapshotOptions = {},
 ): Promise<T> {
-  const owned = createOwnedTemp(serverTempBase(), "pdmcp-upload-");
+  const owned = createOwnedTemp("pdmcp-upload-");
   const stage = owned.work;
-  registerTempDir(owned.root);
   try {
     const out: string[] = [];
     const verifiers: Array<() => Promise<ManifestFile[]>> = [];
@@ -261,6 +260,6 @@ export async function withUploadSnapshot<T>(
     }
     return await fn(out);
   } finally {
-    try { removeTreeSafe(owned.root); } catch { /* the startup sweep takes it if it is ours and orphaned */ } finally { unregisterTempDir(owned.root); }
+    try { removeTreeSafe(owned.root); } catch { /* shutdown removes the whole process directory */ } finally { unregisterTempDir(owned.root); }
   }
 }

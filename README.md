@@ -59,9 +59,12 @@ setups are listed in the [CHANGELOG](CHANGELOG.md) under 2.0.0 and 2.0.1.
   secrets. To put a file in Drive use `drive_upload` from the allowlisted local folder.
 - **Delete by uid (N-03).** The approval prompt shows the item's resolved, escaped name, not just a uid; names that
   resolve to `.` or `..` are refused.
-- **Scratch directories (N-05, N-07).** All temporary directories live under a private base the server owns, with an
-  ownership marker; the startup sweep deletes only marked, old, orphaned ones and never touches a user folder or the
-  verified CLI copy.
+- **Scratch directories (N-05, N-07).** There is no fixed or shared temp location: each process creates its own random
+  0700 directory under the OS temp dir (or, if that is unusable, `<allowed root>/.pdmcp-private-<random>`), verified as a
+  real directory of yours, and every operation's scratch directory lives inside it. The byte and entry ceiling is
+  enforced **while** the CLI writes (the transfer is aborted the moment it is crossed); cleanup runs in `finally` and at
+  exit, entry by entry without following links. Nothing sweeps old directories, so the verified CLI copy of another
+  running instance and your own folders are never touched.
 - **`PROTON_DRIVE_PASS_ENV` (N-08).** `*` alone and prefixes shorter than 3 characters are refused; any use is listed by
   `doctor`.
 
@@ -517,7 +520,7 @@ Limits of this fork's hardening (the closed CLI cannot be inspected):
 - Link passwords are passed to the CLI as an argument (visible in the process list of the machine for the duration of the call); they are never logged or returned.
 - Moving, copying, uploading or adding to an album **inside a shared folder or album** asks the human first (the destination and its ancestors are checked; a failed lookup counts as shared). On a client **without** elicitation that gate is still a model-supplied `confirmed: true` (it is not one of the strict tools), so use a client that can ask. The sharing policy does not inspect who the members are.
 - **The closed CLI can write outside the staging folder.** The server hands the CLI a private staging directory and validates what arrives there, but a CLI that writes somewhere else (another path, a cache, a temp file) is not observed and cannot be stopped by this server. It is inherent to wrapping a closed binary; pin the binary (`PROTON_DRIVE_BIN_SHA256`) and keep it up to date.
-- A scratch directory left by a killed process (SIGKILL) is removed at the next start only if it is marked, old and its creator is gone; otherwise it stays (an orphan is preferred to deleting something that is not ours).
+- A scratch directory left by a process killed with SIGKILL (`pdmcp-XXXXXX` in your temp dir) is **not** removed automatically: an orphan is preferred to a sweep that could delete something that is not ours. Delete it by hand; it only holds partial downloads.
 - The text inside an untrusted envelope can still try to persuade a model. The envelope and markers lower the odds; they are not a guarantee.
 - Document formats (PDF, Office) are not parsed at all; only plain UTF-8 text is read.
 - Fail-closed choices can reject legitimate input: `.key` files (Keynote), uploads with hardlinks or symlinks, downloads of folders that cannot be listed completely.

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { DriveService } from "../dist/services/drive.js";
 import { walkTree, abortBackgroundRefreshes, resetWalkCacheForTests, flushWalkIndexForTests, partialFields } from "../dist/services/walk.js";
 import { Semaphore } from "../dist/utils/semaphore.js";
+import { scratchDirs } from "./helpers/scratch.mjs";
 import { makeSandbox, startServer, waitFor, readPids, sleep } from "./helpers/mcp-client.mjs";
 
 const folder = (name) => ({ uid: `d-${name}`, parentUid: "p", type: "folder", name: { ok: true, value: name } });
@@ -113,12 +114,11 @@ describe("SIGTERM during a download", () => {
     c.callRaw("drive_read_content", { path: "/my-files/a.txt" }, { timeout: 20_000 }).catch(() => {});
     const started = await waitFor(() => readPids(sb.pidFile).some((r) => r.argv0 === "filesystem" && r.role === "child"), 8000);
     assert.ok(started, "download never started");
-    const base = join(tmp, `pdmcp-private-${process.getuid()}`);
-    assert.ok(readdirSync(base).some((n) => n.startsWith("pdmcp-read-")), "temp dir should exist during the download");
+    assert.ok(scratchDirs(tmp, "pdmcp-read-").length > 0, "temp dir should exist during the download");
     const t0 = Date.now();
     c.kill("SIGTERM");
     await c.exitPromise;
     assert.ok(Date.now() - t0 < 5000, `exit took ${Date.now() - t0} ms`);
-    assert.deepEqual(readdirSync(base).filter((n) => n.startsWith("pdmcp-")), []);
+    assert.deepEqual(readdirSync(tmp).filter((n) => n.startsWith("pdmcp-")), [], "the process directory and everything in it is gone");
   });
 });

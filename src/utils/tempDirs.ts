@@ -1,14 +1,39 @@
-import { chmodSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
-/** Directories frozen read-only (upload snapshots) must be made writable before they can be removed. */
-function thaw(path: string): void {
-  let st;
-  try { st = lstatSync(path); } catch { return; }
-  if (!st.isDirectory()) return;
-  try { chmodSync(path, 0o700); } catch { /* removal reports it */ }
-  let names: string[] = [];
-  try { names = readdirSync(path); } catch { /* unreadable */ }
-  for (const n of names) thaw(`${path}/${n}`);
+const MAX_DEPTH = 64;
+const MAX_ENTRIES = 200_000;
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const DIRECTORY = constants.O_DIRECTORY ?? 0;
+const mine = (st: { uid: number }): boolean => typeof process.getuid !== "function" || st.uid === process.getuid();
+
+/**
+ * Removes a directory tree this process created, without following links: each directory is opened with
+ * O_NOFOLLOW|O_DIRECTORY (and made writable if it was frozen read-only), every entry is lstat'ed, files and links are
+ * unlinked, directories are emptied and rmdir'ed. Depth and entry counts are bounded; any surprise throws.
+ */
+export function removeTreeSafe(path: string): void {
+  const budget = { entries: MAX_ENTRIES };
+  const removeDir = (dir: string, depth: number): void => {
+    if (depth > MAX_DEPTH) throw new Error("tree too deep");
+    const fd = openSync(dir, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
+    try {
+      const st = fstatSync(fd);
+      if (!st.isDirectory() || !mine(st)) throw new Error("not a directory of ours");
+      fchmodSync(fd, 0o700);
+      const again = lstatSync(dir); // the name must still be the directory we opened
+      if (again.ino !== st.ino || again.dev !== st.dev) throw new Error("directory changed while it was being removed");
+    } finally { closeSync(fd); }
+    for (const name of readdirSync(dir)) {
+      if (--budget.entries < 0) throw new Error("too many entries");
+      const child = join(dir, name);
+      const cst = lstatSync(child);
+      if (cst.isDirectory() && !cst.isSymbolicLink()) removeDir(child, depth + 1);
+      else unlinkSync(child);
+    }
+    rmdirSync(dir);
+  };
+  removeDir(path, 0);
 }
 
 const live = new Set<string>();
@@ -20,8 +45,7 @@ export const unregisterTempDir = (dir: string): void => { live.delete(dir); };
 /** Synchronous so it can run right before process.exit. */
 export function removeAllTempDirsSync(): void {
   for (const dir of live) {
-    thaw(dir);
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+    try { removeTreeSafe(dir); } catch { /* best effort: only ever a directory this process created */ }
   }
   live.clear();
 }
