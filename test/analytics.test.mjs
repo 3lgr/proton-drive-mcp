@@ -8,7 +8,7 @@ import {
   auditShareStatus, driveUsage, driveFindDuplicates, driveSharingAudit,
 } from "../dist/services/analytics.js";
 import { DriveService } from "../dist/services/drive.js";
-import { usePrivateTmp } from "./helpers/optional-deps.mjs";
+import { usePrivateTmp } from "./helpers/private-tmp.mjs";
 
 const DAY = 86_400_000;
 const NOW = Date.parse("2026-09-30T00:00:00Z");

@@ -8,6 +8,7 @@ import type { DriveFile, ShareStatus } from "../types/index.js";
 import type { DriveService } from "./drive.js";
 import { walkTree, staleFields, partialFields, type WalkNode, type WalkOptions, type WalkResult } from "./walk.js";
 import { validateLocalPath } from "../utils/validation.js";
+import { safeDownload, freezeDownload } from "./downloadGuard.js";
 import { callContext } from "../utils/subprocess.js";
 import { retryOnLocked } from "../utils/lockRetry.js";
 
@@ -228,7 +229,7 @@ export function makeDriveHasher(drive: DriveService): Hasher {
     registerTempDir(dir);
     try {
       validateLocalPath(dir); // same local-path rules as drive_download
-      const r = await drive.download(node.path, dir, "rename", "skip");
+      const r = await safeDownload(drive, freezeDownload({ remotePath: node.path, localPath: dir, fileStrategy: "rename", folderStrategy: "skip" }), { transient: true });
       if (r.failed > 0 || r.downloaded < 1) throw new Error("download failed");
       const [name, ...more] = await readdir(dir);
       if (!name || more.length || !(await stat(join(dir, name))).isFile()) throw new Error("unexpected download result");

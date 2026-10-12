@@ -44,7 +44,7 @@ What the server enforces itself (so the model cannot talk its way past it):
 - sharing policy for links and invitations;
 - untrusted-content envelope and sanitiser for every string that comes from Drive; allowlist-only logs and errors;
 - binary pinning and a private verified copy (`PROTON_DRIVE_BIN_SHA256`), minimal child environment;
-- sandboxed parser process for documents, which are **disabled by default** (`PROTON_DRIVE_ENABLE_DOC_EXTRACT=1`).
+- no document parsing at all: `drive_read_content` reads plain UTF-8 text only (PDF/Office parsers were removed to keep the attack surface small).
 
 What it does not do:
 

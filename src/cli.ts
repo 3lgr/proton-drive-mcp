@@ -43,7 +43,7 @@ Commands:
   version                                  Show CLI/SDK version
   list <path>                              List files at path
   info <path> [--verbose]                  Show node metadata (--verbose = raw CLI node)
-  read <path> [--max-chars N] [--offset N] Text of a Drive file (text/code, .docx, text .pdf; max 10 MB), paged
+  read <path> [--max-chars N] [--offset N] Text of a plain-text Drive file (UTF-8; binaries, PDF and Office files are refused; max 10 MB), paged
   tree [path] [--depth N] [--limit N] [--folders-only] [--refresh]
                                            Folder overview with per-folder counts and sizes (default /my-files, depth 2)
   search [path] [--query S] [--glob G] [--type file|folder] [--media-type P] [--ext pdf,docx]

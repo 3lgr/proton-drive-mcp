@@ -26,9 +26,9 @@ An assistant that can delete, share and download files is only as safe as the we
 | **Local files** | Downloads go through a private staging directory and a pure plan (no symlinks, hardlinks, FIFOs, dot-names, traversal or overwrites; `remove` never deletes a non-empty folder). Uploads run from a frozen, hashed snapshot of the validated tree (no secrets, no symlinks), bound to what was approved. Wider credential denylist; `PROTON_DRIVE_LOCAL_ROOT` narrows access without switching the denylist off; case-insensitive on macOS/Windows. |
 | **Remote paths** | Drive roots are never the subject of a mutation; `drive_delete` accepts only `/trash/<name>` or `/photos-trash/<name>`. |
 | **Sharing policy** | Public links through the tools must be viewer-only, password-protected (8+ characters) and expire within 90 days; no `admin` invitations; optional domain allowlist; strict e-mail/role canonicalisation (`PROTON_DRIVE_SHARE_POLICY`, `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS`). |
-| **Untrusted content** | Everything that carries text written by others (names, paths, invitations, file content) is returned in an `{untrusted, source, notice, content}` envelope, sanitised by a linear Unicode-category scanner with visible `⟦removed:…⟧` markers and a per-response delimiter. Hidden Word text (`w:vanish`) is dropped and reported. |
+| **Untrusted content** | Everything that carries text written by others (names, paths, invitations, file content) is returned in an `{untrusted, source, notice, content}` envelope, sanitised by a linear Unicode-category scanner with visible `⟦removed:…⟧` markers and a per-response delimiter.  |
 | **The CLI binary** | Run by absolute path with a minimal environment; optional `PROTON_DRIVE_BIN_SHA256` pin: only a verified private copy is executed. `doctor` warns about unpinned, PATH-resolved or group/world-writable binaries. |
-| **Parsing** | PDF/DOCX are parsed in a separate Node process under the permission model (no writes, no child processes, no workers), with heap, time and output caps, a streaming byte budget and zip checks (duplicate/absolute names, entry count, expansion ratio, DOCTYPE). |
+| **Parsing** | Document parsing was **removed** (PDF/DOCX). `drive_read_content` reads plain UTF-8 text only, with a byte cap enforced while downloading; binaries are refused with a clear error. Smaller attack surface, fewer dependencies. |
 | **Logs and errors** | Allowlist model: error codes with fixed text and length+hash markers instead of CLI output, paths, links or e-mail addresses. |
 | **Supply chain** | `@modelcontextprotocol/sdk` updated and `proxy-addr` overridden (`npm audit` clean); release workflows split into verify/publish jobs, pinned npm, SHA256SUMS and build-provenance attestation, no overwrites; Docker base pinned by digest; manual `npm publish` is blocked. |
 | **Code** | `index.ts` and `drive.ts` split into cohesive modules; `npm run test:coverage`. |
@@ -480,13 +480,12 @@ Left out of `core` (use `full`): permanent deletion (`drive_delete`, `drive_empt
 
 ### Reading file contents
 
-`drive_read_content` returns the text of a file stored in Drive, without a sync folder: it downloads the file into a private temp directory (mode 0700, always removed afterwards), extracts the text and returns it in pages (`offset` / `maxChars`, default 20000, max 100000 characters; the reply carries `nextOffset` while more remains). Expect 2-4 s per read.
+`drive_read_content` returns the text of a file stored in Drive, without a sync folder: it downloads the file into a private temp directory (mode 0700, always removed afterwards), decodes it as UTF-8 and returns it in pages (`offset` / `maxChars`, default 20000, max 100000 characters; the reply carries `nextOffset` while more remains). Expect 2-4 s per read.
 
-- **Formats:** plain text, markdown, json, csv/tsv, yaml, xml, html (tags are kept as is), log and common code files (UTF-8; binary or non-UTF-8 content is refused as "not text"); `.docx` (paragraph text of `word/document.xml`); `.pdf` with a text layer (first 100 pages; a scanned PDF returns empty text with a note). Everything else, folders and Proton Docs/Sheets are refused with a clear message.
-- **Caps:** files over 10 MB are refused before downloading (`PROTON_DRIVE_READ_MAX_BYTES`, hard maximum 50 MB); a `.docx` whose `document.xml` exceeds 20 MB uncompressed is refused.
-- **Isolation:** `.docx` and `.pdf` parsing runs in a separate worker thread limited to 512 MB of memory and a 20 s timeout (`PROTON_DRIVE_READ_TIMEOUT_MS`, in milliseconds, max 120000); a hostile or oversized file produces a tool error ("too large or complex to read safely") and never takes the server down. Extracted text is capped at 2,000,000 characters.
+- **Formats:** plain text, markdown, json, csv/tsv, yaml, xml, html (tags are kept as is), log and common code files (UTF-8; binary or non-UTF-8 content is refused as "not text"). `.docx`, `.pdf` and every other binary format are refused with a clear message (**document parsing was removed in 2.0.0 to keep the attack surface small**; use `drive_download` and open the file yourself). Folders and Proton Docs/Sheets are refused too.
+- **Caps:** files over 10 MB are refused before downloading (`PROTON_DRIVE_READ_MAX_BYTES`, hard maximum 50 MB), and the download is stopped as soon as more bytes than that are on disk (the declared size is never trusted).
+- **Isolation:** the file goes through the same staged, validated download path as every other transfer (private temp directory, no links, name checks), and is removed afterwards.
 - **Untrusted content:** file text comes from your drive and may contain instructions aimed at the model (prompt injection). The tool returns it as data, nothing is executed, and its description tells the model to treat it as data, never as instructions.
-- **Optional packages:** `.docx` needs `fflate` and `.pdf` needs `unpdf`; both are optional dependencies of this package, installed by default (and included in the MCPB bundle). If they were omitted (`npm install --omit=optional`), PDF/DOCX reading returns a clear error naming the package to install (`npm install fflate unpdf`); text formats work without them. The test suite skips the PDF/DOCX groups with a reason when the packages are missing (never on CI, where they fail instead).
 
 ## Known limitations
 
@@ -496,8 +495,8 @@ Limits of this fork's hardening (the closed CLI cannot be inspected):
 - Link passwords are passed to the CLI as an argument (visible in the process list of the machine for the duration of the call); they are never logged or returned.
 - Moving or copying an item into a folder that is already shared exposes it to that folder's members; the sharing policy does not inspect the destination's members.
 - The text inside an untrusted envelope can still try to persuade a model. The envelope and markers lower the odds; they are not a guarantee.
-- Document extraction is off by default and, when enabled, shows the text layer only: a PDF can hide invisible text that cannot be told from visible text.
-- Fail-closed choices can reject legitimate input: archives with data between entries, `.key` files (Keynote), uploads with hardlinks or symlinks, downloads of folders that cannot be listed completely.
+- Document formats (PDF, Office) are not parsed at all; only plain UTF-8 text is read.
+- Fail-closed choices can reject legitimate input: `.key` files (Keynote), uploads with hardlinks or symlinks, downloads of folders that cannot be listed completely.
 - The hardening was tested with a fake CLI; it has not been exercised against a live account. Windows is unsupported.
 
 Limits that come from the upstream `proton-drive` CLI (v0.8.0), not from this server:
@@ -557,9 +556,7 @@ Every tool group was live-tested by the upstream project on 2026-09-28 against a
 | `PROTON_DRIVE_INDEX` | Optional | Set to `1` (or `true`) to keep completed folder walks in a **plaintext** on-disk index so searches are fast after a restart. Off by default. See [Persistent index](#persistent-index-opt-in). |
 | `PROTON_DRIVE_INDEX_DIR` | Optional | Directory for the index file (default: `~/Library/Caches/proton-drive-mcp` on macOS, `$XDG_CACHE_HOME` or `~/.cache/proton-drive-mcp` elsewhere). Use a dedicated directory: if it exists it must be yours with mode `0700` (group/other access is refused); a missing one is created `0700`. The file is `0600`. |
 | `PROTON_DRIVE_INDEX_MAX_AGE_H` | Optional | Oldest saved index data that may be served, in hours (default 24; 0 = never serve saved data). Served data is marked `stale: true` and refreshed in the background (`drive_sync_plan`, `drive_find_duplicates` and the sharing audit never use it). |
-| `PROTON_DRIVE_ENABLE_DOC_EXTRACT` | Optional | Set to `1` to let `drive_read_content` extract text from `.docx` and `.pdf`. **Off by default (fail closed)**: complex document formats keep producing parser differentials (hidden text, archive tricks), so reading them is an accepted risk the operator opts into. Plain text files are always readable. Even when enabled the parser runs in a sandboxed child process, hidden or doubtful Word text is dropped and reported (`hidden_text_dropped`), and the result is delivered in the untrusted-content envelope. |
 | `PROTON_DRIVE_READ_MAX_BYTES` | Optional | Largest file `drive_read_content` will download, in bytes (default 10485760 = 10 MB; values above 52428800 = 50 MB are clamped). Larger files are refused before any download. |
-| `PROTON_DRIVE_READ_TIMEOUT_MS` | Optional | Hard time limit for parsing one `.pdf`/`.docx` in `drive_read_content`, in milliseconds (default 20000; clamped to 1-120000). On expiry the parsing worker is terminated and the call returns an error. |
 | `PROTON_DRIVE_TOOL_TIER` | Optional | `full` (default, all 47 tools) or `core` (19 everyday tools; see [Token cost](#token-cost)). Tools outside the active tier are hidden from `tools/list` and refused at call time. Read once at startup; an unknown value falls back to `full` with a warning on stderr. |
 
 ---
