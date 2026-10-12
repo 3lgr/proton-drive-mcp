@@ -238,11 +238,13 @@ function execute(stage: string, dest: string, actions: readonly Action[]): { ski
 }
 
 async function staged<T>(
-  localPath: string, expectTop: string | null, policy: Policy, transfer: (stageDir: string) => Promise<T>,
+  localPath: string, expectTop: string | null, policy: Policy, transfer: (stageDir: string) => Promise<T>, transient = false,
+  onStaging?: (stageDir: string) => void,
 ): Promise<{ result: T; skipped: number }> {
   ensurePrivateDir(localPath);
   const realDest = realpathSync.native(localPath);
   const stage = makeStaging(realDest);
+  onStaging?.(stage);
   try {
     const result = await transfer(stage);
     const realStage = realpathSync.native(stage);
@@ -250,21 +252,40 @@ async function staged<T>(
     if (expectTop !== null && top.some((n) => n.name !== expectTop)) {
       throw new Error(`download refused: unexpected entries arrived (${top.filter((n) => n.name !== expectTop).slice(0, 3).map((n) => showValue(n.name, 40, 10)).join(", ")})`);
     }
-    for (const n of top) assertLocalPathAllowed(join(realDest, n.name)); // on the resolved destination, right before use
+    if (!transient) for (const n of top) assertLocalPathAllowed(join(realDest, n.name)); // on the resolved destination, right before use
     const actions = planDownload(top, (rel) => kindOf(join(realDest, ...rel.split("/"))), policy);
+    if (!transient) {
+      // Every path that will be created or replaced goes through the local path policy, descendants of a merge included.
+      for (const a of actions) if (a.op === "place") assertLocalPathAllowed(join(realDest, ...a.dstRel.split("/")));
+    }
     return { result, ...execute(realStage, realDest, actions) };
   } finally {
     try { rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
   }
 }
 
+export interface SafeDownloadOptions {
+  /**
+   * The destination is a private temp directory of this server (content reads, duplicate verification) and the item
+   * is a single file the caller has already inspected: the local path policy and the leading-dot rule do not apply,
+   * but the name check, staging, scan and plan still do. The CLI still never writes into the destination.
+   */
+  transient?: boolean;
+  /** Called with the staging directory as soon as it exists (so a caller can watch its size while the CLI writes). */
+  onStaging?: (stageDir: string) => void;
+}
+
 /** drive_download / CLI download: validated, staged, placed. The CLI never writes into the destination. */
-export async function safeDownload(drive: DriveService, req: Readonly<DownloadRequest>): Promise<DownloadResult> {
-  precheckDownload(req.remotePath, req.localPath);
-  await enumerateRemote(drive, req.remotePath);
+export async function safeDownload(drive: DriveService, req: Readonly<DownloadRequest>, opts: SafeDownloadOptions = {}): Promise<DownloadResult> {
+  if (opts.transient) {
+    assertSafeEntryName(unescapeName(splitRemotePath(req.remotePath).name));
+  } else {
+    precheckDownload(req.remotePath, req.localPath);
+    await enumerateRemote(drive, req.remotePath);
+  }
   const expected = unescapeName(splitRemotePath(req.remotePath).name);
-  const { result, skipped } = await staged(req.localPath, expected, { file: req.fileStrategy, folder: req.folderStrategy }, (stage) =>
-    drive.download(req.remotePath, stage, req.fileStrategy, req.folderStrategy));
+  const { result, skipped } = await staged(req.localPath, opts.transient ? null : expected, { file: req.fileStrategy, folder: req.folderStrategy }, (stage) =>
+    drive.download(req.remotePath, stage, req.fileStrategy, req.folderStrategy), opts.transient === true, opts.onStaging);
   return { ...result, localPath: req.localPath, downloaded: Math.max(0, result.downloaded - skipped), skipped: result.skipped + skipped };
 }
 

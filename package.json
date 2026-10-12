@@ -77,10 +77,6 @@
     "Dockerfile",
     "SECURITY.md"
   ],
-  "optionalDependencies": {
-    "fflate": "0.8.3",
-    "unpdf": "1.8.1"
-  },
   "overrides": {
     "proxy-addr": ">=2.0.8"
   },

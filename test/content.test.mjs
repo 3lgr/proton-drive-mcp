@@ -4,19 +4,15 @@ import assert from "node:assert/strict";
 import { readdirSync, writeFileSync, symlinkSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readDriveContent, sliceCodePoints, docxXmlToText } from "../dist/services/content.js";
+import { readDriveContent, sliceCodePoints } from "../dist/services/content.js";
 import { callContext } from "../dist/utils/subprocess.js";
 import { makeSandbox, startServer } from "./helpers/mcp-client.mjs";
-import { loadOptional, makePdf, skipUnlessOptional, usePrivateTmp } from "./helpers/optional-deps.mjs";
+import { usePrivateTmp } from "./helpers/private-tmp.mjs";
 
-// Document extraction is opt-in (fail closed); these suites test the extractor itself.
-process.env.PROTON_DRIVE_ENABLE_DOC_EXTRACT = "1";
 
 const deps = {};
 // Private TMPDIR per test: readDirs() must only ever see this test's own pdmcp-read-* dirs.
 usePrivateTmp(beforeEach, afterEach);
-const needFflate = await skipUnlessOptional("fflate");
-const needUnpdf = await skipUnlessOptional("unpdf");
 const readDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith("pdmcp-read-"));
 const LOCK = () => new Error("SQLiteError: database is locked");
 
@@ -77,7 +73,7 @@ describe("readDriveContent: refusals before download", () => {
   };
   it("folder", () => refuse({ type: "folder" }, "/my-files/dir", /is a folder/));
   it("Proton Docs / Sheets", () => refuse({ type: "file", mediaType: "application/vnd.proton.docs" }, "/my-files/d", /Proton Docs\/Sheets/));
-  it("unsupported format lists the supported ones", () => refuse({ type: "file", mediaType: "image/png" }, "/my-files/a.png", /unsupported format.*Supported:.*docx.*pdf/));
+  it("unsupported format lists the supported ones", () => refuse({ type: "file", mediaType: "image/png" }, "/my-files/a.png", /unsupported format.*Supported: plain text/s));
   it("over the size cap: message says the size", () => refuse(fileNode({ activeRevision: { claimedSize: 12_000_000 } }), "/my-files/big.txt", /12000000 bytes.*cap of 10485760/));
   it("cap follows PROTON_DRIVE_READ_MAX_BYTES and is clamped to 50 MB", async () => {
     await refuse(fileNode({ activeRevision: { claimedSize: 2000 } }), "/my-files/a.txt", /2000 bytes.*cap of 1000/, ["PROTON_DRIVE_READ_MAX_BYTES", "1000"]);
@@ -120,61 +116,14 @@ describe("readDriveContent: pagination", () => {
   });
 });
 
-describe("readDriveContent: docx", needFflate, () => {
-  let fflate;
-  before(async () => { fflate = await loadOptional("fflate"); });
-  // A real package part carries the w:document root with the WordprocessingML namespace (extraction requires it).
-  const WML = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-  const rooted = (v) => (typeof v === "string" && v.includes("<w:p") && !/<w:document[^>]*xmlns:w/.test(v) ? `<w:document xmlns:w="${WML}"><w:body>${v.replace(/<\/?w:document[^>]*>/g, "")}</w:body></w:document>` : v);
-  const docx = (entries) => Buffer.from(fflate.zipSync(Object.fromEntries(Object.entries(entries).map(([k, v]) => [k, typeof rooted(v) === "string" ? new TextEncoder().encode(rooted(v)) : rooted(v)]))));
-  const XML = '<?xml version="1.0"?><w:document><w:body><w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:tab/><w:t xml:space="preserve"> Q&amp;A</w:t></w:r></w:p><w:p><w:r><w:t>Second</w:t><w:br/><w:t>line &#233;</w:t></w:r></w:p><w:p/><w:sectPr/></w:body></w:document>';
-
-  it("extracts paragraphs, tabs, breaks and entities", async () => {
-    const r = await read(fakeDrive({ node: fileNode({ mediaType: "application/octet-stream" }), name: "a.docx", bytes: docx({ "word/document.xml": XML }) }), "/my-files/a.docx");
-    assert.equal(r.format, "docx");
-    assert.equal(r.text, "Hello\t Q&A\nSecond\nline é\n"); // the trailing <w:p/> is an empty paragraph
-  });
-  it("docxXmlToText: <w:tab> is not mistaken for <w:t>", () => {
-    assert.equal(docxXmlToText("<w:p><w:r><w:tab/></w:r></w:p>"), "\t");
-  });
-  it("rejects a zip-bomb-ish oversize document.xml", async () => {
-    const big = new Uint8Array(21 * 1024 * 1024).fill(97); // compresses to a few KB
-    const buf = docx({ "word/document.xml": big });
-    assert.ok(buf.length < 100_000);
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: buf }), "/my-files/a.docx"), /larger than 20 MB|expands more than/);
-  });
-  it("rejects a zip without document.xml and a non-zip", async () => {
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: docx({ "other.xml": "x" }) }), "/my-files/a.docx"), /no word\/document\.xml/);
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: "not a zip" }), "/my-files/a.docx"), /not a valid \.docx/);
-  });
-  it("missing fflate -> clear error", async () => {
-    const miss = { worker: { moduleSpecifiers: { fflate: "no-such-package-xyz", unpdf: "no-such-package-xyz" } } };
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: docx({ "word/document.xml": XML }) }), "/my-files/a.docx", {}, miss), /DOCX support needs the optional package fflate \(npm install fflate\)/);
-  });
-});
-
-describe("readDriveContent: pdf", needUnpdf, () => {
-  it("extracts the text layer", async () => {
-    const r = await read(fakeDrive({ node: fileNode({ mediaType: "application/pdf" }), name: "a.pdf", bytes: makePdf("Hello PDF") }), "/my-files/a.pdf");
-    assert.equal(r.format, "pdf");
-    assert.match(r.text, /Hello PDF 1/);
-    assert.equal(r.note, undefined);
-  });
-  it("an image-only PDF returns empty text and a note", async () => {
-    const r = await read(fakeDrive({ node: fileNode(), name: "a.pdf", bytes: makePdf(null) }), "/my-files/a.pdf");
-    assert.equal(r.text, "");
-    assert.match(r.note, /no text layer \(scanned\?\)/);
-  });
-  it("reads only the first 100 pages and says so", async () => {
-    const r = await read(fakeDrive({ node: fileNode(), name: "a.pdf", bytes: makePdf("P", 101) }), "/my-files/a.pdf", { maxChars: 100_000 });
-    assert.match(r.note, /first 100 of 101 pages/);
-    assert.ok(!r.text.includes("P 101"));
-    assert.ok(r.text.includes("P 100"));
-  });
-  it("missing unpdf -> clear error", async () => {
-    const miss = { worker: { moduleSpecifiers: { fflate: "no-such-package-xyz", unpdf: "no-such-package-xyz" } } };
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "a.pdf", bytes: makePdf("x") }), "/my-files/a.pdf", {}, miss), /PDF support needs the optional package unpdf \(npm install unpdf\)/);
-  });
+describe("readDriveContent: documents are not parsed", () => {
+  for (const [file, mediaType] of [["/my-files/a.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"], ["/my-files/a.pdf", "application/pdf"], ["/my-files/a.xlsx", "application/octet-stream"], ["/my-files/a.png", "image/png"]]) {
+    it(`${file} is refused with a clear error and is never downloaded`, async () => {
+      const drive = fakeDrive({ node: fileNode({ mediaType }), bytes: "PK\u0003\u0004" });
+      await assert.rejects(read(drive, file), /unsupported format.*Supported: plain text/s);
+      assert.equal(drive.calls.download, 0);
+    });
+  }
 });
 
 describe("readDriveContent: temp dir, retry, abort", () => {
@@ -183,7 +132,8 @@ describe("readDriveContent: temp dir, retry, abort", () => {
     const seen = [];
     const mk = (fail) => fakeDrive({ node: fileNode(), download: async (_r, dir) => {
       seen.push(dir);
-      assert.match(dir, /pdmcp-read-/);
+      assert.match(dir, /pdmcp-stage-/); // the CLI writes to a private staging dir; nothing is read from the destination
+      assert.ok(!dir.includes("/pdmcp-read-"));
       assert.equal(statSync(dir).mode & 0o777, 0o700);
       if (fail) return { downloaded: 0, skipped: 0, failed: 1 };
       writeFileSync(join(dir, "f"), "ok");
@@ -197,7 +147,7 @@ describe("readDriveContent: temp dir, retry, abort", () => {
   });
   it("refuses a symlink or several entries in the download dir", async () => {
     const link = fakeDrive({ node: fileNode(), download: async (_r, dir) => { symlinkSync("/etc/hosts", join(dir, "f")); return { downloaded: 1, skipped: 0, failed: 0 }; } });
-    await assert.rejects(read(link, "/my-files/a.txt"), /unexpected download result/);
+    await assert.rejects(read(link, "/my-files/a.txt"), /symlink|unexpected download result/);
     const two = fakeDrive({ node: fileNode(), download: async (_r, dir) => { writeFileSync(join(dir, "a"), "1"); writeFileSync(join(dir, "b"), "2"); return { downloaded: 1, skipped: 0, failed: 0 }; } });
     await assert.rejects(read(two, "/my-files/a.txt"), /unexpected download result/);
     assert.equal(readDirs().length, 0);

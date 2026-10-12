@@ -30,8 +30,12 @@ are unchanged. **This is a major version because several security behaviours cha
   browser profiles, `.git-credentials` and others are denied by default.
 - **Drive roots** (`/`, `/my-files`, `/trash`, ...) are never the subject of a mutation; destinations other than
   `/my-files` among the roots are refused; `drive_delete` accepts only `/trash/<name>` or `/photos-trash/<name>`.
-- **`drive_read_content` no longer reads `.docx`/`.pdf` by default.** Set `PROTON_DRIVE_ENABLE_DOC_EXTRACT=1` (accepted
-  risk). Plain text is unaffected.
+- **Document parsing was removed (deliberate breaking change): `drive_read_content` now reads plain UTF-8 text only.**
+  `.docx`, `.pdf` and other binaries are refused with a clear error; use `drive_download`. The optional dependencies
+  `fflate` and `unpdf`, the sandboxed parser process and `PROTON_DRIVE_READ_TIMEOUT_MS` are gone. Reason: document
+  parsers kept producing parser-differential findings (hidden text, archive tricks); removing them keeps the attack
+  surface small. The byte cap (`PROTON_DRIVE_READ_MAX_BYTES`) is enforced while downloading and the result stays in the
+  untrusted-content envelope.
 - **Errors**: text printed by the CLI is classified and withheld (error code with fixed text plus a length/hash
   marker). Error messages no longer contain CLI output, paths or links.
 - The CLI runs with a **minimal environment** (`PROTON_DRIVE_PASS_ENV` to pass more).
@@ -44,7 +48,7 @@ are unchanged. **This is a major version because several security behaviours cha
   `realpath.native`; F-04/F-05 wider denylist, name denylist under `LOCAL_ROOT`, recursive upload scan then snapshot;
   F-06 sharing policy; F-07 untrusted-content envelope; F-08 roots and trash-path validation;
   F-09 link password still travels in argv (CLI limitation) but is never logged or returned; F-10 minimal child
-  environment; F-11 sandboxed parser process, byte/entry/ratio ceilings enforced on produced bytes; F-12/F-13 allowlist
+  environment; F-11 the parsers were removed (nothing left to sandbox) and the read byte cap is enforced during the transfer; F-12/F-13 allowlist
   logs and errors; F-14 list caps (200); F-15 random exclusive temp file for the Claude Desktop config;
   F-16 no floating `npx -y` in docs or Smithery config.
 - S-01 optional binary pin with a verified private copy; S-02 `@modelcontextprotocol/sdk` ^1.32.1 and `proxy-addr`
@@ -55,11 +59,9 @@ are unchanged. **This is a major version because several security behaviours cha
 ### Added
 - `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE`, `PROTON_DRIVE_SHARE_POLICY`, `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS`,
   `PROTON_DRIVE_BIN_SHA256`, `PROTON_DRIVE_PASS_ENV`, `PROTON_DRIVE_UPLOAD_MAX_BYTES`,
-  `PROTON_DRIVE_DOWNLOAD_MAX_BYTES`, `PROTON_DRIVE_ENABLE_DOC_EXTRACT`.
+  `PROTON_DRIVE_DOWNLOAD_MAX_BYTES`.
 - `doctor`: binary pin, PATH resolution and writable-location checks.
 - `npm run test:coverage`; SECURITY.md, CONTRIBUTING.md, issue templates; docker in Dependabot.
-- Word text hidden by `w:vanish`, white or tiny text, hidden styles, tracked deletions or `mc:AlternateContent` is
-  dropped and reported (`hidden_text_dropped`).
 
 ### Changed
 - `src/index.ts` and `src/services/drive.ts` split into cohesive modules (no behaviour change).
