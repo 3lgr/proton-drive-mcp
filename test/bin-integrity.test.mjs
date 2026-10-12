@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync, readFileSync, copyFileSync, chmodSync, rmSync, appendFileSync, existsSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { makeSandbox, startServer, nonVersionCalls, fakeEnv, FAKE_CLI, DIST_CLI } from "./helpers/mcp-client.mjs";
+import { makeSandbox, startServer, nonVersionCalls, fakeEnv, waitFor, FAKE_CLI, DIST_CLI } from "./helpers/mcp-client.mjs";
 
 const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
 const dirs = [];
@@ -127,6 +127,9 @@ describe("PROTON_DRIVE_BIN_SHA256", () => {
     const c = await startServer("json", sb, { PROTON_DRIVE_BIN: bin, PROTON_DRIVE_BIN_SHA256: sha(bin) });
     try {
       assert.equal((await c.call("drive_list", { path: "/my-files" })).isError, false);
+      // The startup `version` probe also goes through the verified copy; if it ran after the edit below it would
+      // trip the check itself, drop the copy and let the next call re-verify the pristine original (flaky under load).
+      await waitFor(() => readFileSync(sb.argvLog, "utf8").split("\n").some((l) => l && JSON.parse(l).argv[0] === "version"), 10_000);
       const [exe] = new Set(exeOf(sb));
       chmodSync(dirname(exe), 0o700); chmodSync(exe, 0o700);
       appendFileSync(exe, "\n// adulterated\n");
