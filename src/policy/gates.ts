@@ -94,7 +94,8 @@ export const GATES: Readonly<Record<string, GateSpec>> = {
     consequence: "with conflictStrategy 'remove' deletes the existing LOCAL file before downloading.",
   },
   drive_write_file: {
-    strict: false, applies: always, cliConfirm: false,
+    // The handler always evaluates the gate and reports whether the write would overwrite (`overwrite`).
+    strict: false, applies: (a) => a.overwrite === true, cliConfirm: false,
     describe: { when: "when the file already exists (it would be overwritten)" },
     consequence: "would overwrite an existing file in the sync folder.",
   },

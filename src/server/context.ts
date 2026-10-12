@@ -9,6 +9,8 @@ export interface HandlerContext {
   /** Throws NeedsConfirmationError unless the call may proceed (see policy/gates.ts and policy/approval.ts). */
   readonly gate: (tool: string, a: Args, prompt?: string) => Promise<void>;
   readonly canElicit: () => boolean;
+  /** Throws unless consent was evaluated for this call (for local mutations that do not go through `drive`). */
+  readonly assertConsent: () => void;
   readonly sharePolicy: SharePolicy;
 }
 

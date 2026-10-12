@@ -19,6 +19,8 @@ import { createApprover } from "./policy/approval.js";
 import { strMarker } from "./utils/safeOutput.js";
 import { loadSharePolicy } from "./policy/sharePolicy.js";
 import { HANDLERS } from "./server/handlers/index.js";
+import { dispatchTool } from "./server/dispatch.js";
+import { assertRegistryComplete } from "./server/policy.js";
 import { TOOL_DEFS, CORE_TOOL_NAMES, LARGE_RESULT_TOOLS, resolveTier } from "./server/catalog.js";
 import { checkArgs } from "./server/schema.js";
 import { ok, fail, handleError, presentResult, type ToolResult } from "./server/result.js";
@@ -57,6 +59,8 @@ async function elicitApproval(server: Server, message: string, signal?: AbortSig
 }
 
 export async function main() {
+  // Default deny: a tool without a policy (or a handler, or the other way round) stops the server from starting.
+  assertRegistryComplete(TOOL_DEFS.map((t) => t.name), Object.keys(HANDLERS));
   const drive = new DriveService();
   const tier = resolveTier(process.env.PROTON_DRIVE_TOOL_TIER); // read once at startup
   const activeDefs = tier === "core" ? TOOL_DEFS.filter((t) => CORE_TOOL_NAMES.has(t.name)) : TOOL_DEFS;
@@ -137,9 +141,7 @@ export async function main() {
     }
 
     try {
-      const handler = Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : undefined;
-      if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool ${strMarker(String(name))}`);
-      return await handler(a, { drive, gate, canElicit, sharePolicy });
+      return await dispatchTool(name, a, { drive, gate, canElicit, sharePolicy });
     } catch (err) {
       if (err instanceof McpError) throw err;
       return handleError(err);

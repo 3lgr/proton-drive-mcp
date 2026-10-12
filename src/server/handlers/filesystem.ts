@@ -31,8 +31,7 @@ export const filesystemHandlers: Record<string, Handler> = {
   drive_auth_status: async (_a, { drive }) => {
     return ok(await drive.authStatus());
   },
-  drive_auth_logout: async (a, { drive, gate }) => {
-    await gate("drive_auth_logout", a);
+  drive_auth_logout: async (_a, { drive }) => {
     await drive.authLogout();
     return ok({ message: "Logged out successfully." });
   },
@@ -108,17 +107,15 @@ export const filesystemHandlers: Record<string, Handler> = {
     const moveSrc = validateRemotePath(a.sourcePath);
     const moveDst = validateRemotePath(a.destinationPath);
     const dstParent = splitRemotePath(moveDst).parent;
-    if (dstParent !== splitRemotePath(moveSrc).parent && (await folderIsShared(drive, sharePolicy, dstParent))) {
-      await gate("drive_move", { ...a, sharedDestination: true },
-        `drive_move needs your approval. It ${GATES.drive_move!.consequence}\nsourcePath: ${approvalField(moveSrc)}\ndestinationPath: ${approvalField(moveDst)}`);
-    }
+    const shared = dstParent !== splitRemotePath(moveSrc).parent && (await folderIsShared(drive, sharePolicy, dstParent));
+    await gate("drive_move", { ...a, sharedDestination: shared },
+      `drive_move needs your approval. It ${GATES.drive_move!.consequence}\nsourcePath: ${approvalField(moveSrc)}\ndestinationPath: ${approvalField(moveDst)}`);
     await drive.move(moveSrc, moveDst);
     return ok({ message: `Moved: ${moveSrc} → ${moveDst}` });
   },
-  drive_delete: async (a, { drive, gate }) => {
-    const deletePath = a.path === undefined ? undefined : validateRemotePath(a.path);
-    const deleteUid = a.uid ? validateFlagValue(a.uid as string, "uid") : undefined;
-    await gate("drive_delete", a, `drive_delete needs your approval. It ${GATES.drive_delete!.consequence}\nTarget: ${approvalField(deletePath ?? `uid ${deleteUid}`)}`);
+  drive_delete: async (a, { drive }) => {
+    const deletePath = a.path as string | undefined;
+    const deleteUid = a.uid as string | undefined;
     await drive.delete(deletePath, deleteUid);
     return ok({ message: `Deleted: ${deletePath ?? `uid ${deleteUid}`}` });
   },
@@ -138,8 +135,7 @@ export const filesystemHandlers: Record<string, Handler> = {
     await drive.restore(restorePath, restoreUid);
     return ok({ message: `Restored from trash: ${restorePath ?? `uid ${restoreUid}`}` });
   },
-  drive_empty_trash: async (a, { drive, gate }) => {
-    await gate("drive_empty_trash", a);
+  drive_empty_trash: async (_a, { drive }) => {
     await drive.emptyTrash();
     return ok({ message: "Trash emptied." });
   },
@@ -147,10 +143,8 @@ export const filesystemHandlers: Record<string, Handler> = {
     const copySrc = validateRemotePath(a.sourcePath);
     const copyDst = validateRemotePath(a.destinationPath);
     const copyName = typeof a.newName === "string" ? validateName(a.newName) : undefined;
-    if (await folderIsShared(drive, sharePolicy, copyDst)) {
-      await gate("drive_copy", { ...a, sharedDestination: true },
-        `drive_copy needs your approval. It ${GATES.drive_copy!.consequence}\nsourcePath: ${approvalField(copySrc)}\ndestinationPath: ${approvalField(copyDst)}`);
-    }
+    await gate("drive_copy", { ...a, sharedDestination: await folderIsShared(drive, sharePolicy, copyDst) },
+      `drive_copy needs your approval. It ${GATES.drive_copy!.consequence}\nsourcePath: ${approvalField(copySrc)}\ndestinationPath: ${approvalField(copyDst)}`);
     await drive.copy(copySrc, copyDst, copyName);
     return ok({ message: `Copied: ${copySrc} → ${copyDst}${copyName ? ` as '${copyName}'` : ""}` });
   },
