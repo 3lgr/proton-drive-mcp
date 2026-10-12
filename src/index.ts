@@ -119,7 +119,7 @@ function byTimeDescThenId<T>(time: (x: T) => string | undefined, id: (x: T) => s
 }
 const photoOrder = byTimeDescThenId<AlbumPhoto>((p) => p.captureTime, (p) => p.nodeUid);
 
-type JsonSchemaProp = { type?: string; enum?: readonly unknown[]; items?: { type?: string }; minimum?: number; maximum?: number };
+type JsonSchemaProp = { type?: string; enum?: readonly unknown[]; items?: { type?: string }; minimum?: number; maximum?: number; maxItems?: number };
 type ToolDef = {
   name: string;
   description: string;
@@ -151,6 +151,7 @@ function checkArgs(def: ToolDef, a: Record<string, unknown>): string | undefined
     if (p.type === "array") {
       if (!Array.isArray(v)) return `${k} must be an array.`;
       if (p.items?.type === "string" && v.some((x) => typeof x !== "string")) return `${k} must be an array of strings.`;
+      if (p.maxItems !== undefined && v.length > p.maxItems) return `${k} has ${v.length} items; the limit is ${p.maxItems} per call.`;
     }
     if (p.enum && !p.enum.includes(v)) return `${k} must be one of: ${p.enum.join(", ")}.`;
   }
@@ -864,6 +865,7 @@ const TOOLS = [
         photoPaths: {
           type: "array",
           items: { type: "string" },
+          maxItems: 200,
           description: "One or more absolute photo paths to download (each must start with '/'). E.g. ['/photos/IMG_001.jpg']",
         },
         localFolder: {
@@ -892,6 +894,7 @@ const TOOLS = [
         localPaths: {
           type: "array",
           items: { type: "string" },
+          maxItems: 200,
           description: "One or more absolute local paths to files or folders to upload (each must start with '/').",
         },
         conflictStrategy: {
