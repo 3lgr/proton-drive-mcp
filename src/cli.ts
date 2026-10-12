@@ -22,6 +22,7 @@ import { readDriveContent } from "./services/content.js";
 import { driveUsage, driveFindDuplicates, driveSharingAudit } from "./services/analytics.js";
 import { validateRemotePath, validateRemotePathList, validateLocalPath, validateEmail, validateMessage, validateName, validateFlagValue } from "./utils/validation.js";
 import { GATES, type Args } from "./policy/gates.js";
+import { guardDownload, verifyDownloaded, guardPhotoDownload, verifyPhotoDownload } from "./services/downloadGuard.js";
 import {
   UPLOAD_FILE_STRATEGIES, UPLOAD_FOLDER_STRATEGIES, DOWNLOAD_FILE_STRATEGIES, DOWNLOAD_FOLDER_STRATEGIES,
   PHOTO_UPLOAD_STRATEGIES, PHOTO_DOWNLOAD_STRATEGIES, humanList,
@@ -314,7 +315,10 @@ async function run() {
       const fileConflictRaw = choice("--file-conflict", DOWNLOAD_FILE_STRATEGIES, "skip");
       const folderConflictRaw = choice("--folder-conflict", DOWNLOAD_FOLDER_STRATEGIES, "skip");
       requireConfirmFlag("drive_download", { fileConflictStrategy: fileConflictRaw, folderConflictStrategy: folderConflictRaw });
-      print(await drive.download(remote, local, fileConflictRaw, folderConflictRaw));
+      const plan = await guardDownload(drive, remote, local);
+      const downloaded = await drive.download(remote, local, fileConflictRaw, folderConflictRaw);
+      verifyDownloaded(plan);
+      print(downloaded);
       break;
     }
 
@@ -612,7 +616,10 @@ async function run() {
           process.exit(1);
         }
         requireConfirmFlag("photos_download", { conflictStrategy: conflictRaw });
-        print(await drive.photoDownload(photoPaths, localFolderValidated, conflictRaw as (typeof PHOTO_DOWNLOAD_STRATEGIES)[number]));
+        const photoGuard = guardPhotoDownload(photoPaths, localFolderValidated);
+        const photoResult = await drive.photoDownload(photoPaths, localFolderValidated, conflictRaw as (typeof PHOTO_DOWNLOAD_STRATEGIES)[number]);
+        verifyPhotoDownload(photoGuard);
+        print(photoResult);
       } else if (sub === "upload") {
         if (positionals.length === 0) { console.error("Usage: photo upload <local>... [--conflict X]"); process.exit(1); return; }
         const localPaths: string[] = [];
