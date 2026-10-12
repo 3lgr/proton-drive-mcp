@@ -84,7 +84,7 @@ describe("confirmation flags", () => {
   it("download --file-conflict remove succeeds with --confirm", async () => {
     const r = await runCli(["download", "/my-files/a.txt", join(TMP, "dl"), "--file-conflict", "remove", "--confirm"]);
     assert.equal(r.code, 0, r.stderr);
-    const argv = r.calls[0];
+    const argv = r.calls.find((a) => a[1] === "download"); // the remote item is inspected first (F-02)
     assert.equal(argv[argv.indexOf("--file-conflict-strategy") + 1], "remove");
   });
 

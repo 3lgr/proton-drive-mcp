@@ -10,6 +10,9 @@
 //                     target dir, then hangs like `hang`. Everything else prints "[]".
 //   FAKE_TREE         tree mode: path to a JSON file {"<folder path>": [list items]}; `filesystem list <path>` serves that entry
 //                     (missing entry -> "Item not found" exit 1; a string entry is written to stderr, exit 1). Other commands print "[]".
+//                     tree mode extras: tree["__info__"] = {"<path>": node} answers `filesystem info <path>` (else "[]");
+//                     FAKE_DOWNLOAD_WRITE = JSON [{rel, content?, symlinkTo?}] is written under the destination folder by
+//                     `filesystem download` / `photo download`, which then print a TransferSummary.
 //   FAKE_COUNTER      locked-then-json: file holding the number of calls so far
 //   FAKE_LOCKED_TIMES locked-then-json: how many calls fail with "database is locked" (default 2)
 //   FAKE_TRANSIENT_KIND   transient-then-json: ratelimit | timeout | reset | retryafter | notfound (counter via FAKE_COUNTER)
@@ -19,9 +22,9 @@
 //   FAKE_PIDFILE      hang mode appends {role,pid,argv0} lines (child + grandchild)
 //   FAKE_CLI_VERSION  version text override for `version` (default: CLI 0.8.0 / SDK 0.21.0 text; set verbatim, e.g. "garbage")
 //   FAKE_HANG_VERSION 1 = `version` obeys FAKE_MODE (hang); otherwise it always prints version text
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const argv = process.argv.slice(2);
 const mode = process.env.FAKE_MODE ?? "json";
@@ -165,6 +168,21 @@ switch (mode) {
         process.stdout.write(JSON.stringify(entry) + "\n");
         process.exit(0);
       }, ms);
+    } else if (argv[0] === "filesystem" && argv[1] === "info") {
+      const tree = JSON.parse(readFileSync(process.env.FAKE_TREE, "utf8"));
+      const node = (tree.__info__ ?? {})[argv[2]];
+      process.stdout.write(JSON.stringify(node ?? []) + "\n");
+      process.exit(0);
+    } else if ((argv[0] === "filesystem" && argv[1] === "download") || (argv[0] === "photo" && argv[1] === "download")) {
+      const dest2 = argv[0] === "photo" ? argv[argv.indexOf("--conflict-strategy") - 1] : argv[3];
+      for (const f of JSON.parse(process.env.FAKE_DOWNLOAD_WRITE ?? "[]")) {
+        const full = join(dest2, f.rel);
+        mkdirSync(dirname(full), { recursive: true });
+        if (f.symlinkTo) symlinkSync(f.symlinkTo, full);
+        else writeFileSync(full, f.content ?? "x");
+      }
+      process.stdout.write(JSON.stringify({ transferredItems: 1, transferredBytes: 1, skippedItems: 0, failedItems: 0 }) + "\n");
+      process.exit(0);
     } else {
       process.stdout.write("[]\n");
       process.exit(0);
