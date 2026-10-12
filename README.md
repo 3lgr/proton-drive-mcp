@@ -553,7 +553,7 @@ Limits that come from the upstream `proton-drive` CLI (v0.8.0), not from this se
 
 ## Platform support
 
-Developed and live-tested on **macOS**. CI runs the test suite on Ubuntu and macOS (Node 22 and 24). **Windows is not supported.** Proton does ship a Windows build of its CLI (x64 and arm64, per the [CLI download page](https://proton.me/download/drive/cli/index.html)), so the blocker is on this project's side: the test suite has never passed on Windows, CI does not run it, and the Windows paths in `doctor` / `setup-claude-desktop` (`%APPDATA%`, `PATHEXT` lookup) are untested. The system-PATH warning in `doctor` only knows POSIX directories. Supporting Windows would need a Windows CI job, a passing test suite there, and a live test against the Windows CLI. Linux is covered by CI with the fake CLI but has not been live-tested against a real Proton account.
+Developed and live-tested on **macOS**. CI runs the test suite on Ubuntu and macOS (Node 22, 24 and 26). **Windows is not supported.** Proton does ship a Windows build of its CLI (x64 and arm64, per the [CLI download page](https://proton.me/download/drive/cli/index.html)), so the blocker is on this project's side: the test suite has never passed on Windows, CI does not run it, and the Windows paths in `doctor` / `setup-claude-desktop` (`%APPDATA%`, `PATHEXT` lookup) are untested. The system-PATH warning in `doctor` only knows POSIX directories. Supporting Windows would need a Windows CI job, a passing test suite there, and a live test against the Windows CLI. Linux is covered by CI with the fake CLI but has not been live-tested against a real Proton account.
 
 ## Testing status
 

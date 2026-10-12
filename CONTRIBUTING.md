@@ -13,7 +13,10 @@ npm audit --audit-level=high
 npm run pack:check
 ```
 
-Node 22 or newer. Tests use `test/helpers/fake-cli.mjs` as `PROTON_DRIVE_BIN`; `test/live.test.mjs` only runs with
+Node 22 or newer; CI runs 22, 24 and 26. `npm run test:coverage` is a local tool, CI does not run it. It exited 0
+on Node 22.23 and 26.11 when this was checked (2026-10-12). If you see `coverage file is empty` on a newer Node,
+first make sure no other `npm test` or build is running in the same checkout (the build wipes `dist/`, which the
+coverage run reads), then report it with the Node version. Tests use `test/helpers/fake-cli.mjs` as `PROTON_DRIVE_BIN`; `test/live.test.mjs` only runs with
 `PROTON_DRIVE_LIVE` and a real account, which you should not use for destructive tools.
 
 ## Rules
