@@ -125,7 +125,8 @@ describe("setup-claude-desktop", () => {
     const f = cfgWith(d, { theme: "dark", ...others });
     const before = readFileSync(f, "utf8");
     const sync = tmp();
-    const r1 = await run(["setup-claude-desktop", "--config", f, "--sync-path", sync, "--write"]);
+    const noNodeOnPath = { PATH: tmp() }; // so the entry keeps process.execPath (stable-path lookup: setup-node-path.test.mjs)
+    const r1 = await run(["setup-claude-desktop", "--config", f, "--sync-path", sync, "--write"], { env: noNodeOnPath });
     assert.equal(r1.code, 0, r1.stderr);
     assert.match(r1.stdout, /restart Claude Desktop/);
     const baks = readdirSync(d).filter((n) => /^claude_desktop_config\.json\.bak-\d{17}$/.test(n));
@@ -137,7 +138,7 @@ describe("setup-claude-desktop", () => {
     assert.deepEqual(j1.mcpServers["proton-drive-mcp"], { command: process.execPath, args: [DIST_INDEX], env: { PROTON_DRIVE_BIN: FAKE_CLI, PROTON_DRIVE_SYNC_PATH: sync } });
     const text1 = readFileSync(f, "utf8");
     assert.ok(text1.endsWith("}\n"));
-    await run(["setup-claude-desktop", "--config", f, "--sync-path", sync, "--write"]);
+    await run(["setup-claude-desktop", "--config", f, "--sync-path", sync, "--write"], { env: noNodeOnPath });
     assert.equal(readFileSync(f, "utf8"), text1);
     assert.equal(readdirSync(d).filter((n) => n.includes(".bak-")).length, 1, "unchanged re-run must not add backups");
   });
