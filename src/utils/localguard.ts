@@ -1,4 +1,7 @@
 import { realpathSync, lstatSync, readlinkSync, statSync } from "node:fs";
+
+// realpathSync.native asks the OS, so it also returns the on-disk case of every existing component.
+const realpath = realpathSync.native;
 import { homedir } from "node:os";
 import { resolve, dirname, basename, join, relative, isAbsolute, sep, delimiter } from "node:path";
 
@@ -20,12 +23,23 @@ const HOME_DENY = [
 const ABS_DENY = ["/etc", "/private/etc", "/var/root"];
 const NAME_DENY = [/^\.env(\..*)?$/, /^id_rsa/, /^id_ed25519/, /\.pem$/, /\.p12$/, /\.pfx$/, /\.keychain/];
 
-function isInside(root: string, target: string): boolean {
-  const rel = relative(root, target);
+// macOS (APFS/HFS+) and Windows volumes are normally case-insensitive and Unicode-normalisation-insensitive, but
+// realpath does not canonicalise a tail that does not exist (and the JS realpath does not canonicalise case at
+// all), so "~/.SSH" must still hit a denylist entry spelled "~/.ssh". Protected-location checks therefore compare
+// folded paths; folding can only make a denylist stricter. Allowlist roots are compared exactly: folding there
+// would be permissive on a case-sensitive volume.
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+const fold = (p: string): string => (CASE_INSENSITIVE_FS ? p.normalize("NFC").toLowerCase() : p);
+
+function isInside(root: string, target: string, foldCase = false): boolean {
+  const rel = foldCase ? relative(fold(root), fold(target)) : relative(root, target);
   if (rel === "") return true;
   if (isAbsolute(rel)) return false;
   return rel !== ".." && !rel.startsWith(".." + sep);
 }
+
+/** Denylist containment: case-insensitive where the filesystem usually is. */
+const isProtectedInside = (denied: string, target: string): boolean => isInside(denied, target, true);
 
 /** realpath of the deepest existing ancestor + remaining segments; follows dangling symlinks manually. */
 function realResolve(p: string, depth = 0): string {
@@ -33,7 +47,7 @@ function realResolve(p: string, depth = 0): string {
   let cur = resolve(p);
   for (;;) {
     try {
-      const real = realpathSync(cur);
+      const real = realpath(cur);
       return rest.length ? join(real, ...rest.reverse()) : real;
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
@@ -89,7 +103,7 @@ export function isProtectedEntry(fullPath: string, name: string): boolean {
   if (nameDenied(name)) return true;
   const lexical = resolve(fullPath);
   const real = realResolve(lexical);
-  for (const d of denied) if (isInside(d, real) || isInside(d, lexical)) return true;
+  for (const d of denied) if (isProtectedInside(d, real) || isProtectedInside(d, lexical)) return true;
   return false;
 }
 
@@ -116,7 +130,7 @@ export function assertLocalPathAllowed(absPath: string, opts: { scan?: boolean }
   if (!denied) return;
 
   for (const d of denied) {
-    if (isInside(d, real) || isInside(d, lexical)) {
+    if (isProtectedInside(d, real) || isProtectedInside(d, lexical)) {
       throw new Error(
         `local path is in a protected location and cannot be used: ${absPath} ` +
           `(set PROTON_DRIVE_LOCAL_ROOT to allow specific folders, or PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1 to disable this check)`
@@ -133,7 +147,7 @@ export function assertLocalPathAllowed(absPath: string, opts: { scan?: boolean }
   }
   if (opts.scan && isDirectory(real)) {
     for (const d of denied) {
-      if (isInside(real, d) || isInside(lexical, d)) {
+      if (isProtectedInside(real, d) || isProtectedInside(lexical, d)) {
         throw new Error(
           `local folder contains protected locations and cannot be scanned: ${absPath}; pick a subfolder ` +
             `(set PROTON_DRIVE_LOCAL_ROOT to allow specific folders, or PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1 to disable this check)`
