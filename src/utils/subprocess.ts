@@ -43,6 +43,12 @@ function killTree(child: ChildProcess): void {
   }
 }
 
+/** Registers a helper process (sandboxed parser...) so shutdown kills it; returns the function that forgets it. */
+export function trackChild(child: ChildProcess): () => void {
+  running.add(child);
+  return () => { running.delete(child); };
+}
+
 /** Kill every CLI process this server started (shutdown / client disconnect). */
 export function killAllChildren(): void {
   for (const child of running) killTree(child);

@@ -106,7 +106,7 @@ switch (mode) {
       process.stdout.write(JSON.stringify({ uid: "f1", type: "file", name: { ok: true, value: "a.txt" }, mediaType: "text/plain", activeRevision: { claimedSize: 10 } }) + "\n");
       process.exit(0);
     } else if (argv[0] === "filesystem" && argv[1] === "download") {
-      writeFileSync(join(argv[3], "a.txt"), "partial");
+      writeFileSync(join(argv[3], "a.txt"), "x".repeat(Number(process.env.FAKE_PARTIAL_BYTES ?? 7)));
       hang();
     } else {
       process.stdout.write("[]\n");
