@@ -26,6 +26,11 @@ are unchanged. **This is a major version because several security behaviours cha
   non-empty folder is never deleted). `PROTON_DRIVE_DOWNLOAD_MAX_BYTES` (default 50 GiB).
 - **Uploads** run from a frozen, hashed snapshot of the validated tree; folders containing secret-looking files or any
   symlink/hardlink/special file are refused (`PROTON_DRIVE_UPLOAD_MAX_BYTES`, default 5 GiB; needs temp space).
+- **Local paths are an allowlist now.** Without `PROTON_DRIVE_LOCAL_ROOT` the only folder the tools may read from or
+  write to is `~/ProtonDriveMCP` (created `0700`, refused if it is a symlink). Any other path is refused. A configured
+  root must exist, must not be a symlink, `/` or the home folder, and must not contain protected locations.
+  `PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH=1` restores the old reach (the denylist stays); `doctor` warns about it. One
+  function (`resolveAllowedLocal`) is used by upload, download, photos, sync plan and the sync-folder tools.
 - The credential denylist now also applies **inside** `PROTON_DRIVE_LOCAL_ROOT`; `*.key`, `*.kdbx`, `credentials.json`,
   browser profiles, `.git-credentials` and others are denied by default.
 - **Drive roots** (`/`, `/my-files`, `/trash`, ...) are never the subject of a mutation; destinations other than
@@ -59,7 +64,7 @@ are unchanged. **This is a major version because several security behaviours cha
 ### Added
 - `PROTON_DRIVE_ALLOW_UNATTENDED_DESTRUCTIVE`, `PROTON_DRIVE_SHARE_POLICY`, `PROTON_DRIVE_SHARE_ALLOWED_DOMAINS`,
   `PROTON_DRIVE_BIN_SHA256`, `PROTON_DRIVE_PASS_ENV`, `PROTON_DRIVE_UPLOAD_MAX_BYTES`,
-  `PROTON_DRIVE_DOWNLOAD_MAX_BYTES`.
+  `PROTON_DRIVE_DOWNLOAD_MAX_BYTES`, `PROTON_DRIVE_ALLOW_ANY_LOCAL_PATH`.
 - `doctor`: binary pin, PATH resolution and writable-location checks.
 - `npm run test:coverage`; SECURITY.md, CONTRIBUTING.md, issue templates; docker in Dependabot.
 

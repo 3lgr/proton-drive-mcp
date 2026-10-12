@@ -41,10 +41,9 @@ describe("name denylist under PROTON_DRIVE_LOCAL_ROOT (F-05)", () => {
     }
     assertLocalPathAllowed(join(root, "report.pdf"));
   });
-  it("keeps the protected-location denylist when the root contains it (LOCAL_ROOT=$HOME)", () => {
+  it("a root that is the home folder (or contains protected locations) is refused outright", () => {
     process.env.PROTON_DRIVE_LOCAL_ROOT = homedir();
-    assert.throws(() => assertLocalPathAllowed(join(homedir(), ".ssh", "id_x")), /protected location|secret file/);
-    assertLocalPathAllowed(join(homedir(), "Documents", "a.txt"));
+    assert.throws(() => assertLocalPathAllowed(join(homedir(), "Documents", "a.txt")), /home folder|protected location/);
   });
   it("PROTON_DRIVE_ALLOW_SENSITIVE_PATHS=1 lifts the name denylist but not the root", () => {
     const root = mkdtempSync(join(base, "root-"));
