@@ -136,10 +136,46 @@ describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
     await assert.rejects(read(fakeDrive({ node: fileNode(), name: "many.docx", bytes: buf }), "/many.docx"), /more than 5000 entries/);
   });
 
-  it("an archive whose declared sizes add up past the total ceiling is refused although only one entry is wanted", async () => {
+  it("other entries are never inflated: 240 MB of unwanted entries cost neither time nor memory", async () => {
     const big = new Uint8Array(80 * 1024 * 1024);
-    const z = Buffer.from(fflate.zipSync({ "word/document.xml": [new TextEncoder().encode("<w:p><w:t>x</w:t></w:p>"), { level: 1 }], a: [big, { level: 1 }], b: [big, { level: 1 }], c: [big, { level: 1 }] }));
-    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "total.docx", bytes: z }), "/total.docx"), /declares more than 200 MB/);
+    const z = Buffer.from(fflate.zipSync({ "word/document.xml": [new TextEncoder().encode("<w:p><w:t>kept</w:t></w:p></w:document>"), { level: 1 }], a: [big, { level: 1 }], b: [big, { level: 1 }], c: [big, { level: 1 }] }));
+    const rss0 = process.memoryUsage().rss;
+    const t0 = Date.now();
+    const r = await read(fakeDrive({ node: fileNode(), name: "total.docx", bytes: z }), "/total.docx");
+    assert.equal(r.text, "kept");
+    assert.ok(Date.now() - t0 < 5_000);
+    assert.ok(process.memoryUsage().rss - rss0 < 400 * 1024 * 1024, "unwanted entries were not inflated");
+  });
+
+  it("headers that lie (tiny declared size, huge real content) are ignored: the real bytes are counted and stopped", async () => {
+    const buf = Buffer.from(docx("<w:p><w:t>aaaaaaaaaaaaaaaa</w:t></w:p>".repeat(500_000)));
+    for (let i = 0; i < buf.length - 30; i++) {
+      if (buf.readUInt32LE(i) === 0x02014b50) buf.writeUInt32LE(100, i + 24);
+      if (buf.readUInt32LE(i) === 0x04034b50) buf.writeUInt32LE(100, i + 22);
+    }
+    const t0 = Date.now();
+    await assert.rejects(read(fakeDrive({ node: fileNode(), name: "lie.docx", bytes: buf }), "/lie.docx"), /decompression bomb|larger than/);
+    assert.ok(Date.now() - t0 < 5_000);
+  });
+
+  it("peak memory stays bounded for a 1 GB-expanding entry (stopped at the budget, not after inflating)", async () => {
+    const huge = new Uint8Array(1024 * 1024 * 1024).fill(97);
+    const z = Buffer.from(fflate.zipSync({ "word/document.xml": [huge, { level: 1 }] }));
+    assert.ok(z.length < 5 * 1024 * 1024, `compressed ${z.length}`);
+    const { extractDocx } = await import("../dist/services/contentExtract.js");
+    const rss0 = process.memoryUsage().rss;
+    const t0 = Date.now();
+    await assert.rejects(extractDocx(new Uint8Array(z), (n) => import(n), 10_000), /decompression bomb|larger than/);
+    assert.ok(Date.now() - t0 < 5_000, `took ${Date.now() - t0} ms`);
+    assert.ok(process.memoryUsage().rss - rss0 < 300 * 1024 * 1024, `rss grew ${(process.memoryUsage().rss - rss0) / 1048576} MB`);
+  });
+
+  it("many tiny chunks: a document made of 150k small paragraphs is handled within the budget", async () => {
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648).toString(36);
+    const xml = Array.from({ length: 150_000 }, () => `<w:p><w:t>${rnd()}${rnd()}</w:t></w:p>`).join("") + "</w:document>"; // ~5 MB of low-redundancy text
+    const r = await read(fakeDrive({ node: fileNode(), name: "chunky.docx", bytes: docx(xml) }), "/chunky.docx", { maxChars: 1000 });
+    assert.equal(r.truncated, true);
   });
 
   it("docx: a declared size that differs from the extracted length adds a truncation note", async () => {
@@ -149,7 +185,7 @@ describe("PDF/DOCX parsing runs in a sandboxed child process", needBoth, () => {
       if (buf.readUInt32LE(i) === 0x04034b50) buf.writeUInt32LE(100, i + 22);
     }
     const r = await read(fakeDrive({ node: fileNode(), name: "a.docx", bytes: buf }), "/a.docx");
-    assert.match(r.note ?? "", /document text may be truncated: size mismatch/);
+    assert.match(r.note ?? "", /may be truncated/);
   });
 });
 

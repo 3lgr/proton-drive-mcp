@@ -6,8 +6,6 @@ export const DOCX_MAX_UNCOMPRESSED = 20 * 1024 * 1024;
 export const ZIP_MAX_ENTRIES = 5_000;
 /** word/document.xml may not expand more than this factor (deflate tops out near 1000:1; text sits at 5-20:1). */
 export const ZIP_MAX_RATIO = 100;
-/** Sum of every declared uncompressed size in the archive, whether or not we extract it. */
-export const ZIP_MAX_DECLARED_TOTAL = 200 * 1024 * 1024;
 export const PDF_MAX_PAGES = 100;
 
 export interface ExtractResult { text: string; note?: string; capped: boolean }
@@ -47,46 +45,78 @@ function collectDocxText(xml: string, maxChars: number): { text: string; capped:
   return text.length > maxChars ? { text: text.slice(0, maxChars), capped: true } : { text, capped: n >= maxChars && lines.length < paras.length };
 }
 
+/**
+ * Streaming extraction of word/document.xml. Declared sizes in the zip headers are attacker-controlled and are
+ * never a decision input: the loop counts the bytes the inflater ACTUALLY produces and stops (terminating the
+ * inflater, ceasing to feed input) at the first excess: absolute ceiling, expansion ratio against the archive
+ * size, entry count. Nothing is accumulated past the budget.
+ */
 export async function extractDocx(bytes: Uint8Array, load: Loader, maxChars: number): Promise<ExtractResult> {
   let fflate: any;
   try { fflate = await load("fflate"); } catch { throw new Error("DOCX support needs the optional package fflate (npm install fflate)"); }
-  let tooBig = false;
-  let tooMany = false;
-  let tooDense = false;
-  let tooLarge = false;
-  let declared = -1;
-  let entries = 0;
-  let declaredTotal = 0;
-  let files: Record<string, Uint8Array>;
-  try {
-    files = fflate.unzipSync(bytes, {
-      filter: (f: { name: string; size: number; originalSize: number }) => {
-        // Every entry is counted and measured from its header; nothing is inflated for entries we do not want.
-        if (++entries > ZIP_MAX_ENTRIES) { tooMany = true; return false; }
-        declaredTotal += f.originalSize;
-        if (declaredTotal > ZIP_MAX_DECLARED_TOTAL) { tooLarge = true; return false; }
-        if (f.name !== "word/document.xml") return false;
-        if (f.originalSize > DOCX_MAX_UNCOMPRESSED) { tooBig = true; return false; }
-        if (f.originalSize > 256 * 1024 && f.originalSize / Math.max(1, f.size) > ZIP_MAX_RATIO) { tooDense = true; return false; }
-        declared = f.originalSize;
-        return !tooMany && !tooLarge;
-      },
-    });
-  } catch {
-    throw new Error("not a valid .docx (could not unzip)");
+
+  // Entry count from the end-of-central-directory record: a cheap early refusal (the streaming count below still applies).
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65_535); i--) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) {
+      const total = (bytes[i + 10] ?? 0) | ((bytes[i + 11] ?? 0) << 8);
+      if (total > ZIP_MAX_ENTRIES) throw new Error(`refused: the archive has more than ${ZIP_MAX_ENTRIES} entries`);
+      break;
+    }
   }
-  if (tooMany) throw new Error(`refused: the archive has more than ${ZIP_MAX_ENTRIES} entries`);
-  if (tooLarge) throw new Error(`refused: the archive declares more than ${ZIP_MAX_DECLARED_TOTAL / 1048576} MB uncompressed in total`);
-  if (tooDense) throw new Error(`refused: word/document.xml expands more than ${ZIP_MAX_RATIO}:1 (decompression bomb)`);
-  if (tooBig) throw new Error(`refused: word/document.xml is larger than ${DOCX_MAX_UNCOMPRESSED / 1048576} MB uncompressed`);
-  const entry = files["word/document.xml"];
-  if (!entry) throw new Error("not a valid .docx (no word/document.xml)");
+
+  const FEED = 16 * 1024; // small input steps so the budget is checked often
+  const ratioBudget = Math.min(DOCX_MAX_UNCOMPRESSED, bytes.length * ZIP_MAX_RATIO + 64 * 1024);
+  let entries = 0;
+  let produced = 0;
+  let refusal: string | undefined;
+  let found = false;
+  let finished = false;
+  const chunks: Uint8Array[] = [];
+
+  const unzip = new fflate.Unzip();
+  unzip.register(fflate.UnzipInflate);
+  unzip.onfile = (file: { name: string; ondata: (err: unknown, chunk: Uint8Array, final: boolean) => void; start: () => void; terminate: () => void }) => {
+    if (refusal) return;
+    if (++entries > ZIP_MAX_ENTRIES) { refusal = `refused: the archive has more than ${ZIP_MAX_ENTRIES} entries`; return; }
+    if (file.name !== "word/document.xml") return; // never started: its data is not inflated
+    found = true;
+    file.ondata = (err, chunk, final) => {
+      if (refusal || finished) return;
+      if (err) { refusal = "not a valid .docx (could not unzip)"; return; }
+      produced += chunk.length;
+      if (produced > ratioBudget) {
+        refusal = produced > DOCX_MAX_UNCOMPRESSED
+          ? `refused: word/document.xml is larger than ${DOCX_MAX_UNCOMPRESSED / 1048576} MB uncompressed`
+          : `refused: word/document.xml expands more than ${ZIP_MAX_RATIO}:1 (decompression bomb)`;
+        try { file.terminate(); } catch { /* already stopped */ }
+        return;
+      }
+      chunks.push(chunk);
+      if (final) finished = true;
+    };
+    file.start();
+  };
+
+  try {
+    for (let off = 0; off < bytes.length && !refusal && !finished; off += FEED) {
+      const end = Math.min(bytes.length, off + FEED);
+      unzip.push(bytes.subarray(off, end), end >= bytes.length);
+    }
+  } catch {
+    if (!refusal) throw new Error("not a valid .docx (could not unzip)");
+  }
+  if (refusal) throw new Error(refusal);
+  if (!found) throw new Error("not a valid .docx (no word/document.xml)");
+  if (!finished) throw new Error("not a valid .docx (word/document.xml is incomplete)");
+
+  const entry = new Uint8Array(produced);
+  let at = 0;
+  for (const c of chunks) { entry.set(c, at); at += c.length; }
   const xml = new TextDecoder("utf-8").decode(entry);
   const { text, capped } = collectDocxText(xml, maxChars);
-  // fflate sizes its output buffer from the (attacker-controlled) declared size and silently stops at it, so
-  // a lying size yields a cut-off document with matching lengths; a missing root close tag is the tell.
-  const cutOff = entry.length !== declared || !/<\/w:document>\s*$/.test(xml.slice(-64));
-  return { text, capped, note: cutOff ? "document text may be truncated: size mismatch" : undefined };
+  // a missing root close tag means the XML was cut off (or is not a Word document)
+  const cutOff = !/<\/w:document>\s*$/.test(xml.slice(-64));
+  return { text, capped, note: cutOff ? "document text may be truncated: the XML ends early" : undefined };
 }
 
 export async function extractPdf(bytes: Uint8Array, load: Loader, maxChars: number): Promise<ExtractResult> {
@@ -100,7 +130,12 @@ export async function extractPdf(bytes: Uint8Array, load: Loader, maxChars: numb
     let capped = false;
     for (let i = 1; i <= pages; i++) {
       const tc = await (await pdf.getPage(i)).getTextContent();
-      const s = tc.items.map((it: { str?: string; hasEOL?: boolean }) => (it.str ?? "") + (it.hasEOL ? "\n" : "")).join("");
+      // The budget is checked per item: a single page can not make us build more than what is still allowed.
+      let s = "";
+      for (const it of tc.items as Array<{ str?: string; hasEOL?: boolean }>) {
+        s += (it.str ?? "") + (it.hasEOL ? "\n" : "");
+        if (n + s.length >= maxChars) break;
+      }
       parts.push(s);
       n += s.length + 2;
       if (n >= maxChars) { capped = i < pages || n > maxChars; break; }
