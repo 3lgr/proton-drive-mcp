@@ -5,12 +5,13 @@ import { realpathSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, exis
 import { tmpdir, homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { makeSandbox, startServer, nonVersionCalls } from "./helpers/mcp-client.mjs";
-import { assertSafeEntryName, validateStaged } from "../dist/services/downloadGuard.js";
+import { assertSafeEntryName, scanStaged } from "../dist/services/downloadGuard.js";
+import { planDownload } from "../dist/services/downloadPlan.js";
 
 describe("assertSafeEntryName", () => {
   it("rejects names that cannot be a single, plain path component", () => {
-    for (const n of ["", ".", "..", "a/b", "..\\x", "a\\b", "x\u0000y", "x\ny", "../../.ssh/authorized_keys"]) {
-      assert.throws(() => assertSafeEntryName(n), /unsafe|empty|must not/i, JSON.stringify(n));
+    for (const n of ["", ".", "..", "a/b", "..\\x", "a\\b", "x\u0000y", "x\ny", "../../.ssh/authorized_keys", "invoice\u202Egpj.exe", "a\u200Bb", "\uFEFFname"]) {
+      assert.throws(() => assertSafeEntryName(n), /unsafe|empty|must not|invisible/i, JSON.stringify(n));
     }
   });
   it("accepts ordinary names, and dotfiles below the top level", () => {
@@ -209,16 +210,103 @@ describe("drive_download / photos_download validate remote entries", () => {
   });
 });
 
-describe("validateStaged limits", () => {
+describe("scanStaged limits", () => {
   it("refuses more than 100000 entries", () => {
     const d = mkdtempSync(join(tmpdir(), "vs-"));
     try {
       mkdirSync(join(d, "top"));
       for (let i = 0; i < 100_001; i++) writeFileSync(join(d, "top", `f${i}`), "");
-      assert.throws(() => validateStaged(d), /more than 100000 entries/);
+      assert.throws(() => scanStaged(d), /more than 100000 entries/);
     } finally { rmSync(d, { recursive: true, force: true }); }
   });
   it("fails closed when an entry cannot be inspected", () => {
-    assert.throws(() => validateStaged(join(tmpdir(), "does-not-exist-" + Math.random())));
+    assert.throws(() => scanStaged(join(tmpdir(), "does-not-exist-" + Math.random())));
+  });
+});
+
+// ---- planDownload: pure, so it can be hammered with generated inputs ----
+const F = (name) => ({ name, kind: "file", children: [], files: 1 });
+const D = (name, ...children) => ({ name, kind: "dir", children, files: children.reduce((n, c) => n + c.files, 0) });
+const lookupOf = (m) => (rel) => m[rel];
+
+describe("planDownload", () => {
+  const skip = { file: "skip", folder: "skip" };
+  it("places absent targets and skips existing ones under skip", () => {
+    const plan = planDownload([F("a.txt"), F("b.txt")], lookupOf({ "a.txt": { kind: "file" } }), skip);
+    assert.deepEqual(plan.map((a) => a.op + ":" + (a.dstRel ?? a.srcRel)), ["skip:a.txt", "place:b.txt"]);
+  });
+  it("refuses to touch an existing symlink or special file, whatever the strategy", () => {
+    for (const kind of ["symlink", "other"]) for (const file of ["skip", "rename", "remove"]) {
+      assert.throws(() => planDownload([F("a")], lookupOf({ a: { kind } }), { file, folder: "skip" }), /exists locally as a/);
+    }
+  });
+  it("rename picks a free name and never plans an overwrite", () => {
+    const plan = planDownload([F("a.txt")], lookupOf({ "a.txt": { kind: "file" }, "a (1).txt": { kind: "file" } }), { file: "rename", folder: "skip" });
+    assert.deepEqual(plan, [{ op: "place", srcRel: "a.txt", dstRel: "a (2).txt", kind: "file" }]);
+  });
+  it("remove: file replaces file only; never a directory, never a type mismatch", () => {
+    const p = { file: "remove", folder: "remove" };
+    assert.deepEqual(planDownload([F("a")], lookupOf({ a: { kind: "file" } }), p).map((x) => x.op), ["unlink", "place"]);
+    assert.throws(() => planDownload([F("a")], lookupOf({ a: { kind: "dir", empty: true } }), p), /locally but a file remotely|is a dir/);
+    assert.throws(() => planDownload([D("a")], lookupOf({ a: { kind: "file" } }), p), /is a file locally/);
+  });
+  it("remove: a non-empty local folder is never deleted, an empty one may be replaced", () => {
+    const p = { file: "remove", folder: "remove" };
+    assert.throws(() => planDownload([D("d", F("x"))], lookupOf({ d: { kind: "dir", empty: false } }), p), /non-empty local folder/);
+    assert.deepEqual(planDownload([D("d")], lookupOf({ d: { kind: "dir", empty: true } }), p).map((x) => x.op), ["rmdir", "place"]);
+  });
+  it("merge: dir onto dir only, existing files are kept (skip) and never overwritten", () => {
+    const p = { file: "skip", folder: "merge" };
+    const plan = planDownload([D("d", F("old"), F("new"))], lookupOf({ d: { kind: "dir" }, "d/old": { kind: "file" } }), p);
+    assert.deepEqual(plan.map((a) => a.op + ":" + (a.dstRel ?? a.srcRel)), ["skip:d/old", "place:d/new"]);
+    assert.throws(() => planDownload([D("d")], lookupOf({ d: { kind: "file" } }), p), /merge only combines/);
+    assert.throws(() => planDownload([D("d", F("x"))], lookupOf({ d: { kind: "dir" }, "d/x": { kind: "file" } }), { file: "remove", folder: "merge" }), /never overwrites/);
+  });
+  it("refuses staged symlinks, FIFOs and colliding top-level names", () => {
+    assert.throws(() => planDownload([{ name: "l", kind: "symlink", children: [], files: 0 }], lookupOf({}), skip), /symlink/);
+    assert.throws(() => planDownload([{ name: "p", kind: "other", children: [], files: 0 }], lookupOf({}), skip), /not a regular/);
+    assert.throws(() => planDownload([F("A"), F("a")], lookupOf({}), skip), /collide/);
+  });
+
+  // Generated inputs: whatever the strategies and existing state, a returned plan never overwrites, never leaves the
+  // destination, and only ever acts on regular files and folders.
+  it("property: no plan overwrites an existing item or escapes the destination", () => {
+    let seed = 20260711;
+    const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+    const names = ["a", "b", "c.txt", "d.tar.gz", "e"];
+    const kinds = ["file", "dir", "symlink", "other"];
+    for (let i = 0; i < 3000; i++) {
+      const gen = (depth) => {
+        const n = names.length;
+        const out = [];
+        for (const nm of names.slice(0, 1 + Math.floor(rnd() * n))) {
+          const isDir = depth < 2 && rnd() < 0.4;
+          out.push(isDir ? D(nm, ...gen(depth + 1)) : (rnd() < 0.08 ? { name: nm, kind: pick(["symlink", "other"]), children: [], files: 0 } : F(nm)));
+        }
+        return out;
+      };
+      const top = gen(0);
+      const existing = {};
+      const mark = (nodes, parent) => {
+        for (const nd of nodes) {
+          const rel = parent ? `${parent}/${nd.name}` : nd.name;
+          if (rnd() < 0.5) existing[rel] = { kind: pick(kinds), empty: rnd() < 0.5 };
+          if (nd.kind === "dir") mark(nd.children, rel);
+        }
+      };
+      mark(top, "");
+      const policy = { file: pick(["skip", "rename", "remove"]), folder: pick(["skip", "merge", "rename", "remove"]) };
+      let plan;
+      try { plan = planDownload(top, lookupOf(existing), policy); } catch { continue; }
+      const gone = new Set();
+      for (const a of plan) {
+        if (a.op === "unlink") { assert.equal(existing[a.dstRel]?.kind, "file"); gone.add(a.dstRel); continue; }
+        if (a.op === "rmdir") { assert.equal(existing[a.dstRel]?.kind, "dir"); assert.equal(existing[a.dstRel]?.empty, true); gone.add(a.dstRel); continue; }
+        if (a.op === "skip") continue;
+        assert.ok(!a.dstRel.split("/").some((s) => s === ".." || s === "." || s === ""), a.dstRel);
+        assert.ok(existing[a.dstRel] === undefined || gone.has(a.dstRel), `would overwrite ${a.dstRel}`);
+      }
+    }
   });
 });

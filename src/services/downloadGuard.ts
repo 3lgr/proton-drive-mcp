@@ -1,21 +1,18 @@
 // F-02: a download writes names chosen by the REMOTE side, and the closed CLI sanitises nothing.
-// Design (fail closed throughout; any error refuses the call and removes the staging directory):
-//   1. precheck   - the remote item's own name and the exact local target go through the local path policy.
+// Fail closed throughout: any error refuses the call, promotes nothing and removes the staging directory.
+//   1. precheck   - the item's own name and the exact local target go through the local path policy.
 //   2. enumerate  - a folder is listed in full; every descendant name must be one plain path component.
-//                   An incomplete listing refuses (no "best effort").
-//   3. stage      - the CLI downloads into a fresh 0700 directory BESIDE the destination (same filesystem),
-//                   never into the destination itself.
-//   4. validate   - the staged tree is walked with lstat (links are never followed): symlinks, hardlinked
-//                   files, FIFOs/sockets/devices, case/normalisation collisions, unsafe names, entry and byte
-//                   limits all refuse. Modes are normalised (no setuid/exec bits from the remote side).
-//   5. place      - the destination is resolved ONCE (realpath.native), the final targets are re-checked
-//                   against the local policy, and entries are moved with rename(2) (copy only on EXDEV).
-//                   A failure mid-move rolls back what this call placed.
+//   3. stage      - the CLI downloads into a fresh 0700 directory BESIDE the destination, never into it.
+//   4. scan       - lstat only (links are never followed): names, collisions, hardlinks, limits; modes normalised.
+//   5. plan       - planDownload() (pure, downloadPlan.ts) returns the exact allowed actions or throws.
+//   6. execute    - only those actions run, on the destination resolved once with realpath.native; files move
+//                   with link(2) so nothing is ever overwritten; a failure rolls back what this call placed.
 import {
-  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync,
+  chmodSync, constants, copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync,
+  rmSync, rmdirSync, unlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, basename } from "node:path";
+import { dirname, join } from "node:path";
 import { splitRemotePath, unescapeName, type DriveService } from "./drive.js";
 import { walkTree } from "./walk.js";
 import { assertLocalPathAllowed } from "../utils/localguard.js";
@@ -23,8 +20,10 @@ import { showValue } from "../utils/text.js";
 import { registerTempDir, unregisterTempDir } from "../utils/tempDirs.js";
 import type { DownloadResult, TransferSummary } from "../types/index.js";
 import type { DownloadFileStrategy, DownloadFolderStrategy, PhotoDownloadStrategy } from "../policy/strategies.js";
+import { assertSafeEntryName, planDownload, type Action, type Existing, type Policy, type StagedNode } from "./downloadPlan.js";
 
-const CONTROL_RE = new RegExp("[\\x00-\\x1f\\x7f\\u2028\\u2029]");
+export { assertSafeEntryName };
+
 const MAX_VALIDATION_LISTINGS = 2000;
 const MAX_ENTRIES = 100_000;
 const MAX_DEPTH = 64;
@@ -34,19 +33,6 @@ const DEFAULT_MAX_BYTES = 50 * 1024 ** 3;
 export function downloadMaxBytes(): number {
   const n = Number(process.env["PROTON_DRIVE_DOWNLOAD_MAX_BYTES"]);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_BYTES;
-}
-
-export interface EntryNameOptions { top?: boolean }
-
-/** Throws unless `name` is one plain path component. `top` additionally refuses leading-dot names. */
-export function assertSafeEntryName(name: string, opts: EntryNameOptions = {}): void {
-  if (name === "") throw new Error("unsafe entry name: empty name");
-  if (name === "." || name === "..") throw new Error(`unsafe entry name: ${showValue(name)}`);
-  if (name.includes("/") || name.includes("\\")) throw new Error(`unsafe entry name (contains a path separator): ${showValue(name)}`);
-  if (CONTROL_RE.test(name)) throw new Error(`unsafe entry name (control characters): ${showValue(name)}`);
-  if (opts.top && name.startsWith(".")) {
-    throw new Error(`refusing to download an item whose name starts with '.': ${showValue(name)}. Dotfiles and dot-folders can configure the local machine (shell, ssh, git); rename the item in Drive first.`);
-  }
 }
 
 /** The unescaped name components of `path` below `root` ("\/" is a literal slash inside one name). */
@@ -152,157 +138,120 @@ function makeStaging(realDest: string): string {
   return dir;
 }
 
-// ---- 4. validate ----
+// ---- 4. scan the staged tree (lstat only, links are never followed) ----
 
-const foldKey = (n: string): string => n.normalize("NFC").toLowerCase();
-const umaskBits = (): number => { const m = process.umask(); return m; };
+const umaskBits = (): number => process.umask();
 
-/** Walks the staged tree without following links. Throws on the first violation. Returns the top-level names. */
-export function validateStaged(stageRoot: string): string[] {
-  const realRoot = realpathSync.native(stageRoot);
+/** Builds the description of what arrived. Limits and hardlinks throw here; everything else is judged by planDownload. */
+export function scanStaged(stageRoot: string): StagedNode[] {
   const mask = umaskBits();
   let entries = 0;
   let bytes = 0;
   const max = downloadMaxBytes();
 
-  const walk = (dir: string, depth: number): void => {
+  const scan = (dir: string, depth: number): StagedNode[] => {
     if (depth > MAX_DEPTH) throw new Error("download refused: folder nesting is too deep");
-    const names = readdirSync(dir);
+    const out: StagedNode[] = [];
     const seen = new Set<string>();
-    for (const n of names) {
-      assertSafeEntryName(n, { top: depth === 0 });
-      const key = foldKey(n);
-      if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(n)}`);
+    for (const name of readdirSync(dir).sort()) {
+      assertSafeEntryName(name);
+      const key = name.normalize("NFC").toLowerCase();
+      if (seen.has(key)) throw new Error(`download refused: names that differ only by case or Unicode form collide: ${showValue(name)}`);
       seen.add(key);
       if (++entries > MAX_ENTRIES) throw new Error(`download refused: more than ${MAX_ENTRIES} entries`);
-      const full = join(dir, n);
+      const full = join(dir, name);
       const st = lstatSync(full);
-      if (st.isSymbolicLink()) throw new Error(`download refused: it contains a symlink (${showValue(n)})`);
+      if (st.isSymbolicLink()) { out.push({ name, kind: "symlink", children: [], files: 0 }); continue; }
       if (st.isDirectory()) {
-        chmodSync(full, 0o777 & ~mask & 0o755 | 0o700);
-        walk(full, depth + 1);
+        chmodSync(full, (0o777 & ~mask & 0o755) | 0o700);
+        const children = scan(full, depth + 1);
+        out.push({ name, kind: "dir", children, files: children.reduce((n, c) => n + c.files, 0) });
       } else if (st.isFile()) {
-        if (st.nlink > 1) throw new Error(`download refused: ${showValue(n)} is a hardlink`);
+        if (st.nlink > 1) throw new Error(`download refused: ${showValue(name)} is a hardlink`);
         bytes += st.size;
         if (bytes > max) throw new Error(`download refused: more than PROTON_DRIVE_DOWNLOAD_MAX_BYTES (${max}) arrived`);
-        chmodSync(full, 0o666 & ~mask & 0o644 | 0o600);
+        chmodSync(full, (0o666 & ~mask & 0o644) | 0o600);
+        out.push({ name, kind: "file", children: [], files: 1 });
       } else {
-        throw new Error(`download refused: ${showValue(n)} is not a regular file or folder (FIFO, socket or device)`);
+        out.push({ name, kind: "other", children: [], files: 0 });
       }
     }
+    return out;
   };
-  walk(realRoot, 0);
-  return readdirSync(realRoot);
+  return scan(stageRoot, 0);
 }
 
-// ---- 5. place ----
+// ---- 5. execute exactly the plan ----
 
-interface Counters { placed: number; skipped: number }
-
-function uniqueName(dir: string, name: string): string {
-  const ext = extname(name);
-  const stem = ext && ext !== name ? name.slice(0, -ext.length) : name;
-  for (let i = 1; i < 10_000; i++) {
-    const candidate = `${stem} (${i})${ext === name ? "" : ext}`;
-    if (!existsSyncNoFollow(join(dir, candidate))) return candidate;
-  }
-  throw new Error("could not find a free name for the downloaded item");
+function kindOf(p: string): Existing | undefined {
+  let st;
+  try { st = lstatSync(p); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw e; }
+  if (st.isSymbolicLink()) return { kind: "symlink" };
+  if (st.isDirectory()) return { kind: "dir", empty: readdirSync(p).length === 0 };
+  if (st.isFile()) return { kind: "file" };
+  return { kind: "other" };
 }
 
-function existsSyncNoFollow(p: string): boolean {
-  try { lstatSync(p); return true; } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return false; throw e; }
-}
-
-function moveEntry(src: string, dst: string): void {
+/** Moves one file without ever overwriting: link(2) fails with EEXIST, so a late-appearing target is an error. */
+function placeFile(src: string, dst: string): void {
   try {
-    renameSync(src, dst);
+    linkSync(src, dst);
+    unlinkSync(src);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
-    try {
-      cpSync(src, dst, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, dereference: false });
-    } catch (err) {
-      rmSync(dst, { recursive: true, force: true });
-      throw err;
-    }
+    copyFileSync(src, dst, constants.COPYFILE_EXCL);
+    unlinkSync(src);
+  }
+}
+
+function placeDir(src: string, dst: string): void {
+  try {
+    renameSync(src, dst); // fails on a non-empty existing directory; never merges
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EXDEV") throw e;
+    cpSync(src, dst, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true });
     rmSync(src, { recursive: true, force: true });
   }
 }
 
-function countFiles(p: string): number {
-  const st = lstatSync(p);
-  if (!st.isDirectory()) return 1;
-  return readdirSync(p).reduce((n, c) => n + countFiles(join(p, c)), 0);
-}
-
-function placeEntry(
-  src: string, dstDir: string, name: string, fileStrat: string, folderStrat: string, c: Counters, journal: string[],
-): void {
-  assertSafeEntryName(name);
-  const dst = join(dstDir, name);
-  const srcIsDir = lstatSync(src).isDirectory();
-  if (!existsSyncNoFollow(dst)) {
-    moveEntry(src, dst);
-    journal.push(dst);
-    c.placed++;
-    return;
-  }
-  const dstSt = lstatSync(dst);
-  if (dstSt.isSymbolicLink()) throw new Error(`refusing to write through a symlink at ${showValue(dst)}`);
-  const strat = srcIsDir && dstSt.isDirectory() ? folderStrat : fileStrat;
-  if (strat === "skip") { c.skipped += countFiles(src); return; }
-  if (strat === "rename") {
-    const alt = uniqueName(dstDir, name);
-    moveEntry(src, join(dstDir, alt));
-    journal.push(join(dstDir, alt));
-    c.placed++;
-    return;
-  }
-  if (strat === "merge") {
-    for (const child of readdirSync(src).sort()) placeEntry(join(src, child), dst, child, fileStrat, folderStrat, c, journal);
-    return;
-  }
-  if (strat === "remove") {
-    rmSync(dst, { recursive: true, force: true });
-    moveEntry(src, dst);
-    journal.push(dst);
-    c.placed++;
-    return;
-  }
-  throw new Error(`unknown conflict strategy ${showValue(strat)}`);
-}
-
-function placeAll(realStage: string, realDest: string, names: string[], fileStrat: string, folderStrat: string): Counters {
-  const c: Counters = { placed: 0, skipped: 0 };
-  const journal: string[] = [];
+function execute(stage: string, dest: string, actions: readonly Action[]): { skipped: number } {
+  let skipped = 0;
+  const placed: string[] = [];
   try {
-    for (const name of names) {
-      assertSafeEntryName(name, { top: true });
-      assertLocalPathAllowed(join(realDest, name)); // re-checked on the resolved destination, right before use
-      placeEntry(join(realStage, name), realDest, name, fileStrat, folderStrat, c, journal);
+    for (const a of actions) {
+      if (a.op === "skip") { skipped += a.files; continue; }
+      const dst = join(dest, ...a.dstRel.split("/"));
+      if (a.op === "unlink") { if (kindOf(dst)?.kind !== "file") throw new Error("download refused: the local target changed type"); unlinkSync(dst); continue; }
+      if (a.op === "rmdir") { rmdirSync(dst); continue; }
+      const src = join(stage, ...a.srcRel.split("/"));
+      if (a.kind === "file") placeFile(src, dst); else placeDir(src, dst);
+      placed.push(dst);
     }
   } catch (e) {
-    for (const p of journal.reverse()) {
+    for (const p of placed.reverse()) {
       try { rmSync(p, { recursive: true, force: true }); } catch { /* best effort rollback */ }
     }
     throw e;
   }
-  return c;
+  return { skipped };
 }
 
 async function staged<T>(
-  localPath: string, expectTop: string | null, fileStrat: string, folderStrat: string, transfer: (stageDir: string) => Promise<T>,
-): Promise<{ result: T; counters: Counters }> {
+  localPath: string, expectTop: string | null, policy: Policy, transfer: (stageDir: string) => Promise<T>,
+): Promise<{ result: T; skipped: number }> {
   ensurePrivateDir(localPath);
   const realDest = realpathSync.native(localPath);
   const stage = makeStaging(realDest);
   try {
     const result = await transfer(stage);
-    const names = validateStaged(stage);
-    if (expectTop !== null && names.some((n) => n !== expectTop)) {
-      throw new Error(`download refused: unexpected entries arrived (${names.filter((n) => n !== expectTop).slice(0, 3).map((n) => showValue(n, 40, 10)).join(", ")})`);
+    const realStage = realpathSync.native(stage);
+    const top = scanStaged(realStage);
+    if (expectTop !== null && top.some((n) => n.name !== expectTop)) {
+      throw new Error(`download refused: unexpected entries arrived (${top.filter((n) => n.name !== expectTop).slice(0, 3).map((n) => showValue(n.name, 40, 10)).join(", ")})`);
     }
-    const counters = placeAll(realpathSync.native(stage), realDest, names, fileStrat, folderStrat);
-    return { result, counters };
+    for (const n of top) assertLocalPathAllowed(join(realDest, n.name)); // on the resolved destination, right before use
+    const actions = planDownload(top, (rel) => kindOf(join(realDest, ...rel.split("/"))), policy);
+    return { result, ...execute(realStage, realDest, actions) };
   } finally {
     try { rmSync(stage, { recursive: true, force: true }); } finally { unregisterTempDir(stage); }
   }
@@ -313,24 +262,15 @@ export async function safeDownload(drive: DriveService, req: Readonly<DownloadRe
   precheckDownload(req.remotePath, req.localPath);
   await enumerateRemote(drive, req.remotePath);
   const expected = unescapeName(splitRemotePath(req.remotePath).name);
-  const { result, counters } = await staged(req.localPath, expected, req.fileStrategy, req.folderStrategy, (stage) =>
+  const { result, skipped } = await staged(req.localPath, expected, { file: req.fileStrategy, folder: req.folderStrategy }, (stage) =>
     drive.download(req.remotePath, stage, req.fileStrategy, req.folderStrategy));
-  return {
-    ...result,
-    localPath: req.localPath,
-    downloaded: Math.max(0, result.downloaded - counters.skipped),
-    skipped: result.skipped + counters.skipped,
-  };
+  return { ...result, localPath: req.localPath, downloaded: Math.max(0, result.downloaded - skipped), skipped: result.skipped + skipped };
 }
 
 /** photos_download / CLI photo download. Photos are single files, so there is nothing to enumerate remotely. */
 export async function safePhotoDownload(drive: DriveService, req: Readonly<PhotoDownloadRequest>): Promise<TransferSummary> {
   precheckPhotoDownload(req);
-  const { result, counters } = await staged(req.localPath, null, req.strategy, "merge", (stage) =>
+  const { result, skipped } = await staged(req.localPath, null, { file: req.strategy, folder: "skip" }, (stage) =>
     drive.photoDownload([...req.remotePaths], stage, req.strategy));
-  return {
-    ...result,
-    transferredItems: Math.max(0, result.transferredItems - counters.skipped),
-    skippedItems: result.skippedItems + counters.skipped,
-  };
+  return { ...result, transferredItems: Math.max(0, result.transferredItems - skipped), skippedItems: result.skippedItems + skipped };
 }

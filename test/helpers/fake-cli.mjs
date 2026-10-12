@@ -24,9 +24,9 @@
 //   FAKE_PIDFILE      hang mode appends {role,pid,argv0} lines (child + grandchild)
 //   FAKE_CLI_VERSION  version text override for `version` (default: CLI 0.8.0 / SDK 0.21.0 text; set verbatim, e.g. "garbage")
 //   FAKE_HANG_VERSION 1 = `version` obeys FAKE_MODE (hang); otherwise it always prints version text
-import { appendFileSync, chmodSync, existsSync, linkSync, mkdirSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const argv = process.argv.slice(2);
 const mode = process.env.FAKE_MODE ?? "json";
@@ -170,6 +170,18 @@ switch (mode) {
         process.stdout.write(JSON.stringify(entry) + "\n");
         process.exit(0);
       }, ms);
+    } else if (argv[0] === "filesystem" && argv[1] === "upload" && process.env.FAKE_UPLOAD_CAPTURE) {
+      // Records what the "CLI" was handed: the path and, for a folder, every file's content and mtime.
+      const cap = { path: argv[2], files: {} };
+      const walk = (p, rel) => {
+        const st = lstatSync(p);
+        if (st.isDirectory()) { for (const n of readdirSync(p)) walk(join(p, n), rel ? rel + "/" + n : n); }
+        else cap.files[rel || basename(p)] = { content: readFileSync(p, "utf8"), mtimeMs: st.mtimeMs, mode: st.mode & 0o777 };
+      };
+      walk(argv[2], "");
+      writeFileSync(process.env.FAKE_UPLOAD_CAPTURE, JSON.stringify(cap));
+      process.stdout.write(JSON.stringify({ transferredItems: 1, transferredBytes: 1, skippedItems: 0, failedItems: 0 }) + "\n");
+      process.exit(0);
     } else if (argv[0] === "filesystem" && argv[1] === "info") {
       const tree = JSON.parse(readFileSync(process.env.FAKE_TREE, "utf8"));
       const node = (tree.__info__ ?? {})[argv[2]];
