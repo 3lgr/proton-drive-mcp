@@ -1,6 +1,9 @@
 // F-08: roots are never the subject of a mutation, and drive_delete/restore only ever see /trash/<name>.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { makeSandbox, startServer, nonVersionCalls } from "./helpers/mcp-client.mjs";
 import { isRootPath, assertMutablePath, assertDestinationFolder, TRASH_ITEM_RE } from "../dist/policy/remoteRoots.js";
 
@@ -25,6 +28,9 @@ describe("remoteRoots helpers", () => {
     for (const p of ["/trash", "/trash/", "/my-files/a", "/trash/a/b", "/trashy/a", "/photos-trash"]) assert.doesNotMatch(p, TRASH_ITEM_RE, p);
   });
 });
+
+const UPLOAD_SRC = join(mkdtempSync(join(tmpdir(), "rp-")), "src.txt");
+writeFileSync(UPLOAD_SRC, "x");
 
 async function refused(tool, args) {
   const sb = makeSandbox();
@@ -63,8 +69,8 @@ describe("write tools refuse roots before spawning the CLI", () => {
     await refused("drive_mkdir", { path: "/trash" });
   });
   it("drive_upload destination / and /trash", async () => {
-    await refused("drive_upload", { localPath: "/tmp", remotePath: "/" });
-    await refused("drive_upload", { localPath: "/tmp", remotePath: "/trash" });
+    await refused("drive_upload", { localPath: UPLOAD_SRC, remotePath: "/" });
+    await refused("drive_upload", { localPath: UPLOAD_SRC, remotePath: "/trash" });
   });
   it("sharing mutations on a root", async () => {
     await refused("drive_share_invite", { path: "/my-files", email: "a@b.co", role: "viewer", confirmed: true });
@@ -93,7 +99,7 @@ describe("normal paths still work", () => {
     await allowed("drive_rename", { path: "/my-files/a.txt", newName: "b.txt" });
     await allowed("drive_copy", { sourcePath: "/my-files/a.txt", destinationPath: "/my-files" });
     await allowed("drive_mkdir", { path: "/my-files/new" });
-    await allowed("drive_upload", { localPath: "/tmp", remotePath: "/my-files" });
+    await allowed("drive_upload", { localPath: UPLOAD_SRC, remotePath: "/my-files" });
   });
 });
 

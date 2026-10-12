@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSandbox, startServer, nonVersionCalls, readArgvLog, FAKE_CLI } from "./helpers/mcp-client.mjs";
 
-const TMP = tmpdir();
+// Upload sources must exist (uploads run from a validated snapshot, F-04): a private per-run folder holds them.
+const TMP = mkdtempSync(join(tmpdir(), "pdmcp-srv-"));
+for (const f of ["x", "x.txt", "a.jpg"]) writeFileSync(join(TMP, f), "data");
 const P = "/my-files/a.txt";
 const GATED_ALWAYS = {
   drive_auth_logout: {},
@@ -328,7 +330,9 @@ describe("argv passed to the CLI", () => {
 
   it("drive_upload passes both conflict strategies", async () => {
     await s.c.call("drive_upload", { localPath: join(TMP, "x.txt"), remotePath: "/my-files", fileConflictStrategy: "rename", folderConflictStrategy: "merge" });
-    assert.deepEqual(last(), ["filesystem", "upload", join(TMP, "x.txt"), "/my-files", "--file-conflict-strategy", "rename", "--folder-conflict-strategy", "merge", "--json"]);
+    const argv = last(); // the CLI is handed a private snapshot with the same base name (F-04)
+    assert.match(argv[2], /pdmcp-upload-.*x\.txt$/);
+    assert.deepEqual([argv[0], argv[1], ...argv.slice(3)], ["filesystem", "upload", "/my-files", "--file-conflict-strategy", "rename", "--folder-conflict-strategy", "merge", "--json"]);
   });
 
   it("drive_version calls `version` without --json", async () => {

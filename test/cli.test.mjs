@@ -7,7 +7,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:
 import { join } from "node:path";
 import { makeSandbox, fakeEnv, nonVersionCalls, McpClient, DIST_CLI } from "./helpers/mcp-client.mjs";
 
-const TMP = tmpdir();
+// Upload sources must exist (uploads run from a validated snapshot, F-04): a private per-run folder holds them.
+const TMP = mkdtempSync(join(tmpdir(), "pdmcp-srv-"));
+for (const f of ["x", "x.txt", "a.jpg"]) writeFileSync(join(TMP, f), "data");
 const cleanups = [];
 after(() => cleanups.forEach((f) => f()));
 
