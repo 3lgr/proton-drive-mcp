@@ -74,8 +74,10 @@ function writableByOthers(p: string): boolean {
  * A `node` on PATH that is the same file as the running one, as an absolute path that survives upgrades
  * (/opt/homebrew/bin/node rather than /opt/homebrew/Cellar/node/<version>/bin/node). Same file means equal
  * realpath, so this never selects a different install. Relative and empty PATH entries are skipped (they depend on
- * the cwd), as is a directory or binary that group/others can write to. No variable other than PATH is consulted.
- * Any doubt falls back to process.execPath.
+ * the cwd), as is a PATH directory that group/others can write to (that directory is the new trust surface: anyone
+ * who can write there could swap the link). The real binary's own permissions are not judged: the fallback,
+ * process.execPath, is exactly as exposed, and CI tool caches (e.g. /opt/hostedtoolcache) are group-writable.
+ * No variable other than PATH is consulted. Any doubt falls back to process.execPath.
  */
 export function stableNodePath(execPath: string = process.execPath, pathVar: string = process.env["PATH"] ?? ""): string {
   let real: string;
@@ -84,7 +86,7 @@ export function stableNodePath(execPath: string = process.execPath, pathVar: str
   for (const dir of pathVar.split(delimiter)) {
     if (!dir || !isAbsolute(dir)) continue;
     const candidate = join(dir, name);
-    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real && !writableByOthers(dir) && !writableByOthers(real)) return candidate; } catch { /* dangling link: next */ }
+    try { if (isExecutableFile(candidate) && realpathSync(candidate) === real && !writableByOthers(dir)) return candidate; } catch { /* dangling link: next */ }
   }
   return execPath;
 }

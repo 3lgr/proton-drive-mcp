@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, symlinkSync, chmodSync as chmod2, copyFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeSandbox, fakeEnv, DIST_CLI } from "./helpers/mcp-client.mjs";
+import { stableNodePath } from "../dist/utils/claudeConfig.js";
 
 const dirs = [];
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -82,5 +83,17 @@ describe("setup-claude-desktop: stable node path", () => {
     assert.equal((await setupDryRun(d)).command, process.execPath);
     chmod2(d, 0o755);
     assert.equal((await setupDryRun(d)).command, join(d, "node"));
+  });
+  it("does not reject the stable link because the real binary is group-writable (CI tool caches are)", () => {
+    const d = tmp();
+    const realDir = tmp();
+    const fakeNode = join(realDir, "real-node");
+    writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n");
+    chmodSync(fakeNode, 0o775); // group-writable, like /opt/hostedtoolcache on GitHub runners
+    symlinkSync(fakeNode, join(d, "node"));
+    chmodSync(d, 0o755);
+    assert.equal(stableNodePath(fakeNode, d), join(d, "node"));
+    chmodSync(d, 0o777); // the PATH directory is the trust surface: still refused
+    assert.equal(stableNodePath(fakeNode, d), fakeNode);
   });
 });
