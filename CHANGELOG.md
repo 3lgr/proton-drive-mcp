@@ -1,5 +1,10 @@
 # Changelog
 
+> **Versioning note.** 2.0.1 removed the `drive_write_file` tool, which is a breaking change and by strict semver
+> would have been 3.0.0. It was kept in the 2.0.x line on purpose: 2.0.0 had been published hours earlier, nothing is
+> known to depend on that tool, the removal is recorded as breaking in the 2.0.1 notes below, and re-releasing
+> identical code under a new major only adds noise. From here on any removal or incompatible change bumps the major.
+
 ## 2.0.4 - 2026-10-12
 
 Follow-up to the 2.0.3 review: the stable `node` link is a persistent dependency, so the choice is now explicit.
